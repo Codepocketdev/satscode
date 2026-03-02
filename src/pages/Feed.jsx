@@ -88,6 +88,8 @@ const HIDDEN_PREFIXES = [
   'PRESENCE_ONLINE:','PRESENCE_OFFLINE:','FOLLOWING:','SOCIALS:',
   'BLOG_POST:','NEWS_DELETE:','EVENT_DELETE:','GROUP:','SUBMISSION:',
   'POW_BLOCK:','POW_DELETE:','ASSESSMENT_CREATE:','DELETED:','COURSES:',
+  // SatsCode internal system events — never show in feed
+  'BOUNTY_ACCEPTED:','I want to claim this bounty:','BOUNTY_CLAIM:',
 ]
 
 // ── Feed prefs persistence ────────────────────────────────────────────────────
@@ -171,14 +173,43 @@ function ZapModal({ event, profile, onClose }) {
   const AMOUNTS = [1, 21, 100, 500, 1000, 5000]
 
   const zap = async (sats) => {
-    if (!lnAddress) { setErrMsg('This user has no Lightning address'); setStatus('err'); return }
     setStatus('fetching')
     try {
-      // Build LNURL pay request
-      const [user, domain] = lnAddress.split('@')
-      const lnurlRes = await fetch(`https://${domain}/.well-known/lnurlp/${user}`)
-      if (!lnurlRes.ok) throw new Error('Could not reach Lightning provider')
-      const lnurlData = await lnurlRes.json()
+      // Resolve lightning address — check profile props first, then fetch fresh from relay
+      let resolvedAddress = profile?.lud16 || profile?.lud06 || null
+
+      if (!resolvedAddress) {
+        // Try fetching fresh kind:0 from relay in case cached profile is stale
+        const freshProfile = await new Promise((resolve) => {
+          const pool = getPool()
+          const sub = pool.subscribe(RELAYS, { kinds:[0], authors:[event.pubkey], limit:1 }, {
+            onevent(e) { try { resolve(JSON.parse(e.content)) } catch { resolve(null) } },
+            oneose() { resolve(null) }
+          })
+          setTimeout(() => resolve(null), 5000)
+        })
+        resolvedAddress = freshProfile?.lud16 || freshProfile?.lud06 || null
+      }
+
+      if (!resolvedAddress) { setErrMsg('This user has no Lightning address'); setStatus('err'); return }
+
+      // Handle lud06 (raw LNURL bech32) vs lud16 (Lightning Address user@domain)
+      let lnurlData
+      if (resolvedAddress.toLowerCase().startsWith('lnurl')) {
+        // Decode bech32 LNURL
+        const { decode } = await import('nostr-tools/nip19')
+        const decoded = atob(resolvedAddress.replace(/lnurl1/i,'').replace(/[^a-z0-9]/gi,''))
+        const lnurlRes = await fetch(decoded)
+        if (!lnurlRes.ok) throw new Error('Could not reach Lightning provider')
+        lnurlData = await lnurlRes.json()
+      } else {
+        // Standard Lightning Address user@domain
+        const [user, domain] = resolvedAddress.split('@')
+        if (!user || !domain) throw new Error('Invalid Lightning address format')
+        const lnurlRes = await fetch(`https://${domain}/.well-known/lnurlp/${user}`)
+        if (!lnurlRes.ok) throw new Error('Could not reach Lightning provider')
+        lnurlData = await lnurlRes.json()
+      }
 
       const msats = sats * 1000
       if (msats < lnurlData.minSendable || msats > lnurlData.maxSendable)
@@ -922,6 +953,10 @@ export default function Feed({ user }) {
           // Filter out registry registration notes
           const evTags = (event.tags || []).map(t => t[1] || '')
           if (evTags.includes('satscode-registry')) return
+          // Filter out bounty system internal events by tag
+          if (evTags.includes('bounty-claim')) return
+          if (evTags.includes('bounty-accepted')) return
+          if (evTags.includes('deleted')) return
 
           // ── Deletion marker: kind:1 with ["t","deleted"] tag ──────────────
           // When a bounty is deleted it publishes a kind:1 DELETED: marker.
