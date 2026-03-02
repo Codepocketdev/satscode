@@ -90,6 +90,7 @@ const HIDDEN_PREFIXES = [
   'POW_BLOCK:','POW_DELETE:','ASSESSMENT_CREATE:','DELETED:','COURSES:',
   // SatsCode internal system events — never show in feed
   'BOUNTY_ACCEPTED:','I want to claim this bounty:','BOUNTY_CLAIM:',
+  'TOOL:',
 ]
 
 // ── Feed prefs persistence ────────────────────────────────────────────────────
@@ -957,6 +958,7 @@ export default function Feed({ user }) {
           if (evTags.includes('bounty-claim')) return
           if (evTags.includes('bounty-accepted')) return
           if (evTags.includes('deleted')) return
+          if (evTags.includes('satscode-tool')) return
 
           // ── Deletion marker: kind:1 with ["t","deleted"] tag ──────────────
           // When a bounty is deleted it publishes a kind:1 DELETED: marker.

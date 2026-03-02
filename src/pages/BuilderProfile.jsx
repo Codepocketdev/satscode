@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { SimplePool } from 'nostr-tools/pool'
 import { nip19 } from 'nostr-tools'
 import { finalizeEvent } from 'nostr-tools/pure'
-import { ArrowLeft, Zap, MessageCircle, Globe, CheckCircle, Copy, Loader, Code2, X, UserPlus, UserCheck } from 'lucide-react'
+import { ArrowLeft, Zap, MessageCircle, Globe, CheckCircle, Copy, Loader, Code2, X, UserPlus, UserCheck, Trophy, Wrench, Flame } from 'lucide-react'
 import MessagesPage from './MessagesPage'
 
 const RELAYS = ['wss://relay.damus.io','wss://nos.lol','wss://relay.nostr.band','wss://relay.primal.net']
@@ -13,12 +13,6 @@ const S = {
   cream:'#F5ECD7', creamDim:'rgba(245,236,215,0.72)', creamFaint:'rgba(245,236,215,0.35)',
   border:'rgba(201,168,76,0.12)', borderMid:'rgba(201,168,76,0.28)',
   green:'#22c55e', red:'#ef4444',
-}
-
-const SKILL_COLORS = {
-  bitcoin:'#C9A84C', nostr:'#A78BFA', lightning:'#FCD34D', react:'#61DAFB',
-  rust:'#F97316', python:'#3B82F6', typescript:'#60A5FA', design:'#EC4899',
-  mobile:'#8B5CF6', web:'#22C55E', devops:'#F59E0B', solidity:'#9CA3AF',
 }
 
 let _pool = null
@@ -42,6 +36,33 @@ const timeAgo = ts => {
   if (s < 3600) return Math.floor(s/60) + 'm ago'
   if (s < 86400) return Math.floor(s/3600) + 'h ago'
   return new Date(ts * 1000).toLocaleDateString('en-GB', { day:'numeric', month:'short' })
+}
+
+const SKILL_COLORS = {
+  bitcoin:'#C9A84C', nostr:'#A78BFA', lightning:'#FCD34D', react:'#61DAFB',
+  rust:'#F97316', python:'#3B82F6', typescript:'#60A5FA', design:'#EC4899',
+  mobile:'#8B5CF6', web:'#22C55E', devops:'#F59E0B', solidity:'#9CA3AF',
+}
+const CATEGORY_COLORS = {
+  wallet:'#C9A84C', relay:'#A78BFA', client:'#61DAFB', library:'#22C55E',
+  bot:'#F97316', API:'#60A5FA', other:'#9CA3AF',
+}
+const parseTool = (content) => {
+  const lines = (content||'').split('\n')
+  const d = { name:'', description:'', category:'', stack:[], github:'', url:'', lightning:'' }
+  if (lines[0]?.startsWith('TOOL:')) d.name = lines[0].replace('TOOL:','').trim()
+  for (const line of lines.slice(1)) {
+    const col = line.indexOf(':'); if (col===-1) continue
+    const key = line.slice(0,col).trim().toLowerCase()
+    const val = line.slice(col+1).trim()
+    if (key==='description') d.description = val
+    if (key==='category')    d.category    = val
+    if (key==='stack')       d.stack       = val.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean)
+    if (key==='github')      d.github      = val
+    if (key==='url')         d.url         = val
+    if (key==='lightning')   d.lightning   = val
+  }
+  return d
 }
 
 const detectType = (content='', tags=[]) => {
@@ -194,25 +215,48 @@ export default function BuilderProfile({ npub, builder, initialProfile, onClose,
     if (!pubkeyHex) { setLoadingPosts(false); return }
     const seen = new Set()
     const collected = []
-    const BUILD_TAGS = ['satscode','bitcoin','buildinpublic','ship','shipped','bounty','milestone','nostr','lightning']
-    const sub = pool().subscribe(RELAYS, { kinds:[1], authors:[pubkeyHex], limit:100 }, {
-      onevent(e) {
-        if (seen.has(e.id)) return
-        const evTags = (e.tags||[]).map(t => t[1]||'').map(t => t.toLowerCase())
-        if (evTags.includes('satscode-registry')) return
-        const content = (e.content||'').toLowerCase()
-        const isBuildTag  = evTags.some(t => BUILD_TAGS.includes(t))
-        const isBuildWord = content.includes('shipped') || content.includes('just built') || content.includes('bounty') || content.includes('milestone') || content.includes('v0.') || content.includes('v1.') || content.includes('#satscode') || content.includes('#buildinpublic') || content.includes('#bitcoin')
-        if (!isBuildTag && !isBuildWord) return
-        seen.add(e.id)
-        collected.push(e)
-        collected.sort((a,b) => b.created_at - a.created_at)
-        setPosts([...collected])
-      },
-      oneose() { sub.close(); setLoadingPosts(false) }
-    })
-    setTimeout(() => { try { sub.close() } catch {}; setLoadingPosts(false) }, 8000)
-    return () => { try { sub.close() } catch {} }
+    const deletedIds = new Set()
+
+    // Fetch deletions first, then tools
+    const delSub = pool().subscribe(RELAYS,
+      { kinds:[5], authors:[pubkeyHex], since:Math.floor(Date.now()/1000)-86400*90, limit:200 },
+      {
+        onevent(e) { (e.tags||[]).filter(t=>t[0]==='e'&&t[1]).forEach(t=>deletedIds.add(t[1])) },
+        oneose() {
+          delSub.close()
+          const sub = pool().subscribe(RELAYS,
+            { kinds:[1], authors:[pubkeyHex], '#t':['satscode-tool'], limit:100 },
+            {
+              onevent(e) {
+                if (seen.has(e.id)) return
+                if (deletedIds.has(e.id)) return
+                if (!e.content.startsWith('TOOL:')) return
+                seen.add(e.id)
+                collected.push(e)
+                collected.sort((a,b) => b.created_at - a.created_at)
+                setPosts([...collected])
+              },
+              oneose() { sub.close(); setLoadingPosts(false) }
+            }
+          )
+          setTimeout(() => { setLoadingPosts(false) }, 8000)
+        }
+      }
+    )
+    // Live deletion watcher — removes tools instantly if deleted while viewing
+    const liveDel = pool().subscribe(RELAYS,
+      { kinds:[5], authors:[pubkeyHex], since:Math.floor(Date.now()/1000) },
+      {
+        onevent(e) {
+          const ids = (e.tags||[]).filter(t=>t[0]==='e'&&t[1]).map(t=>t[1])
+          if (ids.length) setPosts(prev => prev.filter(t => !ids.includes(t.id)))
+        },
+        oneose() {}
+      }
+    )
+
+    setTimeout(() => { try{delSub.close()}catch{}; setLoadingPosts(false) }, 10000)
+    return () => { try{delSub.close()}catch{}; try{liveDel.close()}catch{} }
   }, [pubkeyHex])
 
   // ── GitHub fetch ─────────────────────────────────────────────────────────────
@@ -417,23 +461,54 @@ export default function BuilderProfile({ npub, builder, initialProfile, onClose,
               </div>
             )}
             {posts.map(ev => {
-              const type = detectType(ev.content, ev.tags||[])
-              const typeConf = { ship:{icon:'⚙', color:'#4CAF9A',label:'Shipped'}, bounty:{icon:'🏆',color:S.gold,label:'Bounty'}, milestone:{icon:'🔥',color:'#E8944A',label:'Milestone'}, post:{icon:null,color:null,label:null} }[type]
+              const tool = parseTool(ev.content)
               return (
-                <div key={ev.id} style={{ background:S.card, border:'1px solid '+S.border, borderRadius:12, padding:'14px', transition:'border-color .2s' }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor=S.borderMid}
-                  onMouseLeave={e => e.currentTarget.style.borderColor=S.border}
+                <div key={ev.id} style={{ background:S.card, border:`1px solid ${S.border}`, borderRadius:14, padding:'16px', transition:'border-color .2s' }}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor=S.borderMid}
+                  onMouseLeave={e=>e.currentTarget.style.borderColor=S.border}
                 >
-                  {typeConf.label && (
-                    <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:7, fontFamily:'Montserrat,sans-serif', fontSize:'0.55rem', fontWeight:700, letterSpacing:'0.15em', color:typeConf.color }}>
-                      {typeConf.icon} {typeConf.label}
+                  {/* Tool header */}
+                  <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:8, marginBottom:8 }}>
+                    <div>
+                      <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:3 }}>
+                        <div style={{ fontFamily:'Cormorant Garamond,serif', fontSize:'1.15rem', fontWeight:700, color:S.cream }}>{tool.name}</div>
+                        {tool.category && (
+                          <span style={{ padding:'2px 8px', borderRadius:20, background:(CATEGORY_COLORS[tool.category]||S.gold)+'14', border:`1px solid ${(CATEGORY_COLORS[tool.category]||S.gold)}35`, fontFamily:'Montserrat,sans-serif', fontSize:'0.5rem', fontWeight:700, color:CATEGORY_COLORS[tool.category]||S.gold }}>
+                            {tool.category}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:'0.48rem', color:'rgba(201,168,76,0.28)' }}>{timeAgo(ev.created_at)}</div>
+                    </div>
+                  </div>
+                  {/* Description */}
+                  {tool.description && (
+                    <div style={{ fontFamily:'Cormorant Garamond,serif', fontStyle:'italic', fontWeight:300, fontSize:'0.92rem', color:S.creamDim, lineHeight:1.7, marginBottom:10 }}>
+                      {tool.description}
                     </div>
                   )}
-                  <div style={{ fontFamily:'Cormorant Garamond,serif', fontSize:'1rem', fontWeight:300, color:S.creamDim, lineHeight:1.75, wordBreak:'break-word' }}>
-                    {renderContent(ev.content||'')}
-                  </div>
-                  <div style={{ marginTop:8, fontFamily:'JetBrains Mono,monospace', fontSize:'0.5rem', color:'rgba(201,168,76,0.28)' }}>
-                    {timeAgo(ev.created_at)}
+                  {/* Stack */}
+                  {tool.stack.length > 0 && (
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:10 }}>
+                      {tool.stack.map(s=>(
+                        <span key={s} style={{ padding:'3px 8px', borderRadius:20, background:(SKILL_COLORS[s]||S.gold)+'14', border:`1px solid ${(SKILL_COLORS[s]||S.gold)}35`, fontFamily:'Montserrat,sans-serif', fontSize:'0.5rem', fontWeight:600, color:SKILL_COLORS[s]||S.gold }}>{s}</span>
+                      ))}
+                    </div>
+                  )}
+                  {/* Links */}
+                  <div style={{ display:'flex', gap:7, flexWrap:'wrap' }}>
+                    {tool.github && (
+                      <a href={tool.github.startsWith('http')?tool.github:'https://'+tool.github} target="_blank" rel="noopener noreferrer"
+                        style={{ display:'flex', alignItems:'center', gap:4, padding:'5px 10px', borderRadius:8, background:'rgba(255,255,255,0.04)', border:`1px solid ${S.border}`, fontFamily:'Montserrat,sans-serif', fontSize:'0.58rem', fontWeight:600, color:S.creamFaint, textDecoration:'none' }}>
+                        GitHub
+                      </a>
+                    )}
+                    {tool.url && (
+                      <a href={tool.url.startsWith('http')?tool.url:'https://'+tool.url} target="_blank" rel="noopener noreferrer"
+                        style={{ display:'flex', alignItems:'center', gap:4, padding:'5px 10px', borderRadius:8, background:'rgba(255,255,255,0.04)', border:`1px solid ${S.border}`, fontFamily:'Montserrat,sans-serif', fontSize:'0.58rem', fontWeight:600, color:S.creamFaint, textDecoration:'none' }}>
+                        Live
+                      </a>
+                    )}
                   </div>
                 </div>
               )

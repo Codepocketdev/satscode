@@ -8,6 +8,7 @@ import Feed from './pages/Feed'
 import ProfilePage from './pages/ProfilePage'
 import MessagesPage from './pages/MessagesPage'
 import Settings from './pages/Settings'
+import SubmitTool from './pages/SubmitTool'
 import Registry from './pages/Registry'
 import Stack from './pages/Stack'
 import Bounties from './pages/Bounties'
@@ -112,7 +113,7 @@ export default function App() {
                 <Route path="/messages"       element={<div style={{color:'#C9A84C',padding:40,fontFamily:'Montserrat,sans-serif'}}>Messages — coming soon</div>} />
                 <Route path="/settings"       element={<Settings user={user} onLogout={handleLogout} />} />
                 <Route path="/post-bounty"    element={<Navigate to="/bounties" />} />
-                <Route path="/submit-tool"    element={<div style={{color:'#C9A84C',padding:40,fontFamily:'Montserrat,sans-serif'}}>Submit Tool — coming soon</div>} />
+                <Route path="/submit-tool"    element={<SubmitTool user={user} />} />
                 <Route path="/projects"       element={<div style={{color:'#C9A84C',padding:40,fontFamily:'Montserrat,sans-serif'}}>My Projects — coming soon</div>} />
                 <Route path="*"              element={<Navigate to="/feed" />} />
               </Routes>
