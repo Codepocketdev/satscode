@@ -9,10 +9,10 @@ import ProfilePage from './pages/ProfilePage'
 import MessagesPage from './pages/MessagesPage'
 import Settings from './pages/Settings'
 import SubmitTool from './pages/SubmitTool'
+import ProofOfWork from './pages/ProofOfWork'
 import Registry from './pages/Registry'
 import Stack from './pages/Stack'
 import Bounties from './pages/Bounties'
-import ProofOfWork from './pages/ProofOfWork'
 
 const USER_KEY = 'satscode_user'
 const NSEC_KEY = 'satscode_nsec'
@@ -106,7 +106,7 @@ export default function App() {
                 <Route path="/feed"           element={<Feed user={user} />} />
                 <Route path="/registry"       element={<Registry user={user} />} />
                 <Route path="/bounties"       element={<Bounties user={user} />} />
-                <Route path="/pow"            element={<ProofOfWork />} />
+                <Route path="/pow"            element={<ProofOfWork user={user} />} />
                 <Route path="/stack"          element={<Stack />} />
                 <Route path="/profile"        element={<ProfilePage user={user} onUserUpdate={u => { setUser(u); localStorage.setItem('satscode_user', JSON.stringify(u)) }} />} />
                 <Route path="/messages"       element={<MessagesPage user={user} />} />
