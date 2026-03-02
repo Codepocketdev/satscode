@@ -213,7 +213,8 @@ export default function ProfilePage({ user }) {
       localStorage.setItem('satscode_user', JSON.stringify({ ...stored, profile: profileData }))
       setMsg({ type: 'ok', text: 'Profile published!' })
       setEditing(false)
-      setTimeout(() => window.location.reload(), 1000)
+      // Update local profile state so UI reflects changes immediately — no reload needed
+      setProfile(profileData)
     } catch (e) { setMsg({ type: 'err', text: e.message || 'Failed to save' }) }
     setSaving(false)
   }
