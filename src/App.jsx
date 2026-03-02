@@ -107,7 +107,7 @@ export default function App() {
                 <Route path="/bounties"       element={<Bounties user={user} />} />
                 <Route path="/pow"            element={<ProofOfWork />} />
                 <Route path="/stack"          element={<Stack />} />
-                <Route path="/profile"        element={<ProfilePage user={user} />} />
+                <Route path="/profile"        element={<ProfilePage user={user} onUserUpdate={u => { setUser(u); localStorage.setItem('satscode_user', JSON.stringify(u)) }} />} />
                 <Route path="/messages"       element={<MessagesPage user={user} />} />
                 <Route path="/messages"       element={<div style={{color:'#C9A84C',padding:40,fontFamily:'Montserrat,sans-serif'}}>Messages — coming soon</div>} />
                 <Route path="/settings"       element={<Settings user={user} onLogout={handleLogout} />} />

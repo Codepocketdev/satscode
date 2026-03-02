@@ -138,7 +138,7 @@ function InputField({ label, value, onChange, placeholder, type = 'text' }) {
   )
 }
 
-export default function ProfilePage({ user }) {
+export default function ProfilePage({ user, onUserUpdate }) {
   const profile = user?.profile || {}
   const npub = user?.npub || ''
   const storedNsec = localStorage.getItem('satscode_nsec') || ''
@@ -213,8 +213,8 @@ export default function ProfilePage({ user }) {
       localStorage.setItem('satscode_user', JSON.stringify({ ...stored, profile: profileData }))
       setMsg({ type: 'ok', text: 'Profile published!' })
       setEditing(false)
-      // Update local profile state so UI reflects changes immediately — no reload needed
-      setProfile(profileData)
+      // Update parent user state so UI reflects changes immediately
+      if (onUserUpdate) onUserUpdate({ ...user, profile: profileData })
     } catch (e) { setMsg({ type: 'err', text: e.message || 'Failed to save' }) }
     setSaving(false)
   }
