@@ -1,0 +1,26 @@
+{
+  "name": "SatsCode — Bitcoin Builders Guild",
+  "short_name": "SatsCode",
+  "description": "A decentralized guild for Bitcoin and Nostr builders.",
+  "theme_color": "#0D0B06",
+  "background_color": "#0D0B06",
+  "display": "standalone",
+  "orientation": "portrait",
+  "scope": "/",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

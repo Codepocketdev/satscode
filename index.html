@@ -4,11 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
-    <!-- Identity -->
     <title>SatsCode — Bitcoin Builders Guild</title>
     <meta name="description" content="A decentralized guild for Bitcoin and Nostr builders. Post bounties, ship in public, earn sats." />
 
     <!-- PWA -->
+    <link rel="manifest" href="/manifest.json" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
     <meta name="theme-color" content="#0D0B06" />
@@ -33,6 +33,13 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+        })
+      }
+    </script>
   </body>
 </html>
 
