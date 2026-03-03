@@ -1236,23 +1236,8 @@ export default function Feed({ user }) {
 
           cache.seenIds.add(event.id)
 
-          // Handle kind:6 reposts — appears immediately for ALL users via relay WebSocket
-          if (event.kind === 6) {
-            try {
-              const original = JSON.parse(event.content)
-              if (!original || !original.id) return
-              const k6card = { ...event, _original: original }
-              fetchProfiles([event.pubkey, original.pubkey], cacheKey)
-              if (isInitial.current) {
-                batch.push(k6card)
-              } else {
-                // Push straight to feed, no banner — relay delivers to all subscribers
-                cache.posts = [k6card, ...cache.posts].slice(0,100)
-                setPosts([...cache.posts])
-              }
-            } catch(err) { console.error('[k6]', err) }
-            return
-          }
+          // kind:6 handled separately by handleK6 via authors subscription
+          if (event.kind === 6) return
 
           if (isInitial.current) {
             batch.push(event)
@@ -1297,6 +1282,7 @@ export default function Feed({ user }) {
           // Fetch satscode registry pubkeys then subscribe to their kind:6 by authors
           // This catches reposts from ANY Nostr client and persists across refresh
           const since = Math.floor(Date.now()/1000) - 86400 * 7
+          const liveFrom = Math.floor(Date.now()/1000)
 
           const handleK6 = (k6) => {
             if (cache.seenIds.has(k6.id)) return
@@ -1304,13 +1290,23 @@ export default function Feed({ user }) {
             try {
               const original = JSON.parse(k6.content)
               if (!original || !original.id) return
-              const k6card = { ...k6, _original: original }
+              // Unique id per repost — won't collide with original or other reposts of same note
+              const k6card = { ...k6, id: original.id + '_rp_' + k6.pubkey, _original: original }
               fetchProfiles([k6.pubkey, original.pubkey], cacheKey)
+              // Remove bare original kind:1 — RepostCard replaces it
               cache.posts = [...cache.posts, k6card].sort((a,b) => b.created_at - a.created_at).slice(0,100)
               setPosts([...cache.posts])
             } catch(err) { console.error('[k6]', err) }
           }
 
+          // Immediate live WebSocket — starts NOW, no waiting for registry
+          // Catches reposts tagged #satscode from our app the moment they hit relay
+          pool.subscribe(RELAYS, { kinds:[6], '#t':['satscode'], since: liveFrom }, {
+            onevent: handleK6,
+            oneose() {}
+          })
+
+          // Registry fetch → past history + cross-client live by authors
           const communityPubkeys = new Set()
           const regSub = pool.subscribe(RELAYS, { kinds:[1], '#t':['satscode-registry'], limit:200 }, {
             onevent(e) { communityPubkeys.add(e.pubkey) },
@@ -1318,18 +1314,19 @@ export default function Feed({ user }) {
               regSub.close()
               const authors = [...communityPubkeys]
               if (!authors.length) return
-              // Past 7 days reposts — loads on refresh, not just live
+              // Past 7 days — loads history on refresh
               pool.subscribe(RELAYS, { kinds:[6], authors, since, limit:100 }, {
                 onevent: handleK6,
                 oneose() {}
               })
-              // Live WebSocket — stays open, catches new reposts instantly from any client
-              pool.subscribe(RELAYS, { kinds:[6], authors, since: Math.floor(Date.now()/1000) }, {
+              // Cross-client live — catches Yakihonne/Damus reposts by community members
+              pool.subscribe(RELAYS, { kinds:[6], authors, since: liveFrom }, {
                 onevent: handleK6,
                 oneose() {}
               })
             }
           })
+
         }
       }
     )
