@@ -1192,9 +1192,9 @@ export default function Feed({ user }) {
     }
 
     const filter =
-      source === 'satscode'             ? { kinds: [1,6], '#t': ['satscode'],   since: Math.floor(Date.now()/1000) - 86400 * 3, limit: 50 } :
-      source === 'bitcoin'              ? { kinds: [1,6], '#t': ['bitcoin'],    since: Math.floor(Date.now()/1000) - 86400,     limit: 50 } :
-      source === 'custom' && customTag  ? { kinds: [1,6], '#t': [customTag],    since: Math.floor(Date.now()/1000) - 86400 * 7, limit: 50 } :
+      source === 'satscode'             ? { kinds: [1], '#t': ['satscode'],   since: Math.floor(Date.now()/1000) - 86400 * 3, limit: 50 } :
+      source === 'bitcoin'              ? { kinds: [1], '#t': ['bitcoin'],    since: Math.floor(Date.now()/1000) - 86400,     limit: 50 } :
+      source === 'custom' && customTag  ? { kinds: [1], '#t': [customTag],    since: Math.floor(Date.now()/1000) - 86400 * 7, limit: 50 } :
       null
 
     if (!filter) { setLoading(false); return }
@@ -1207,8 +1207,9 @@ export default function Feed({ user }) {
       const sub = pool.subscribe(RELAYS, filterOverride || filter, {
         onevent(event) {
           if (cache.seenIds.has(event.id)) return
-          if (!event.content?.trim()) return
-          if (HIDDEN_PREFIXES.some(p => event.content.startsWith(p))) return
+          // kind:6 has JSON content — don't run text checks on it
+          if (event.kind !== 6 && !event.content?.trim()) return
+          if (event.kind !== 6 && HIDDEN_PREFIXES.some(p => event.content.startsWith(p))) return
           if (deletedIds.has(event.id)) return  // ← skip kind:5 deleted events
           // Filter out registry registration notes
           const evTags = (event.tags || []).map(t => t[1] || '')
@@ -1235,23 +1236,21 @@ export default function Feed({ user }) {
 
           cache.seenIds.add(event.id)
 
-          // Handle kind:6 reposts — store the k6 event itself, render as RepostCard
+          // Handle kind:6 reposts — appears immediately for ALL users via relay WebSocket
           if (event.kind === 6) {
             try {
-              if (cache.seenIds.has(event.id)) return
-              cache.seenIds.add(event.id)
               const original = JSON.parse(event.content)
               if (!original || !original.id) return
-              // Store k6 event with original embedded
               const k6card = { ...event, _original: original }
               fetchProfiles([event.pubkey, original.pubkey], cacheKey)
               if (isInitial.current) {
                 batch.push(k6card)
               } else {
+                // Push straight to feed, no banner — relay delivers to all subscribers
                 cache.posts = [k6card, ...cache.posts].slice(0,100)
-                setNewPosts(prev => [k6card, ...prev])
+                setPosts([...cache.posts])
               }
-            } catch {}
+            } catch(err) { console.error('[k6]', err) }
             return
           }
 
@@ -1292,9 +1291,45 @@ export default function Feed({ user }) {
         },
         oneose() {
           delSub.close()
-
           feedSub = startFeed()
 
+          // ── Kind:6 repost subscription ─────────────────────────────────────────
+          // Fetch satscode registry pubkeys then subscribe to their kind:6 by authors
+          // This catches reposts from ANY Nostr client and persists across refresh
+          const since = Math.floor(Date.now()/1000) - 86400 * 7
+
+          const handleK6 = (k6) => {
+            if (cache.seenIds.has(k6.id)) return
+            cache.seenIds.add(k6.id)
+            try {
+              const original = JSON.parse(k6.content)
+              if (!original || !original.id) return
+              const k6card = { ...k6, _original: original }
+              fetchProfiles([k6.pubkey, original.pubkey], cacheKey)
+              cache.posts = [...cache.posts, k6card].sort((a,b) => b.created_at - a.created_at).slice(0,100)
+              setPosts([...cache.posts])
+            } catch(err) { console.error('[k6]', err) }
+          }
+
+          const communityPubkeys = new Set()
+          const regSub = pool.subscribe(RELAYS, { kinds:[1], '#t':['satscode-registry'], limit:200 }, {
+            onevent(e) { communityPubkeys.add(e.pubkey) },
+            oneose() {
+              regSub.close()
+              const authors = [...communityPubkeys]
+              if (!authors.length) return
+              // Past 7 days reposts — loads on refresh, not just live
+              pool.subscribe(RELAYS, { kinds:[6], authors, since, limit:100 }, {
+                onevent: handleK6,
+                oneose() {}
+              })
+              // Live WebSocket — stays open, catches new reposts instantly from any client
+              pool.subscribe(RELAYS, { kinds:[6], authors, since: Math.floor(Date.now()/1000) }, {
+                onevent: handleK6,
+                oneose() {}
+              })
+            }
+          })
         }
       }
     )
