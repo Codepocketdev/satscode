@@ -370,7 +370,63 @@ function ActionBtn({ onClick, icon, count, activeColor, active, hoverBg }) {
 }
 
 // ── Post card ─────────────────────────────────────────────────────────────────
-function PostCard({ event, profiles, onAvatarClick, onDM, onComment }) {
+
+function RepostCard({ event, profiles, onAvatarClick, onComment }) {
+  const reposterProfile = profiles[event.pubkey] || {}
+  const reposterName = reposterProfile.name || reposterProfile.display_name || event.pubkey.slice(0,10)+'...'
+  const original = event._original
+  const origProfile = profiles[original && original.pubkey] || {}
+  const origName = origProfile.name || origProfile.display_name || (original && original.pubkey ? original.pubkey.slice(0,10)+'...' : '?')
+  const timeAgoStr = (() => {
+    const s = Math.floor(Date.now()/1000) - event.created_at
+    if (s < 60) return 'just now'
+    if (s < 3600) return Math.floor(s/60)+'m ago'
+    if (s < 86400) return Math.floor(s/3600)+'h ago'
+    return Math.floor(s/86400)+'d ago'
+  })()
+  if (!original) return null
+  return (
+    <div style={{ marginBottom:12 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'0 4px 6px' }}>
+        {reposterProfile.picture
+          ? <img src={reposterProfile.picture} onError={e=>e.target.style.display='none'} style={{ width:18, height:18, borderRadius:'50%', objectFit:'cover', border:'1px solid rgba(34,197,94,0.4)', flexShrink:0 }}/>
+          : <div style={{ width:18, height:18, borderRadius:'50%', background:'rgba(34,197,94,0.1)', border:'1px solid rgba(34,197,94,0.4)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Cormorant Garamond,serif', fontSize:'0.55rem', color:'#22c55e', flexShrink:0 }}>{reposterName[0]}</div>
+        }
+        <Repeat2 size={11} color='#22c55e'/>
+        <span style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.55rem', fontWeight:600, color:'rgba(34,197,94,0.8)' }}>{reposterName} reposted</span>
+        <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:'0.45rem', color:'rgba(245,236,215,0.2)', marginLeft:'auto' }}>{timeAgoStr}</span>
+      </div>
+      <div style={{ background:S.card, border:'1px solid rgba(34,197,94,0.2)', borderRadius:12, padding:'14px 16px 10px' }}
+        onMouseEnter={e=>e.currentTarget.style.borderColor='rgba(34,197,94,0.4)'}
+        onMouseLeave={e=>e.currentTarget.style.borderColor='rgba(34,197,94,0.2)'}
+      >
+        <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:10 }}>
+          <div onClick={()=>onAvatarClick && onAvatarClick(original.pubkey, origProfile)} style={{ cursor:'pointer', flexShrink:0 }}>
+            {origProfile.picture
+              ? <img src={origProfile.picture} onError={e=>e.target.style.display='none'} style={{ width:38, height:38, borderRadius:'50%', objectFit:'cover', border:'1px solid rgba(201,168,76,0.3)' }}/>
+              : <div style={{ width:38, height:38, borderRadius:'50%', background:'rgba(201,168,76,0.08)', border:'1px solid rgba(201,168,76,0.25)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Cormorant Garamond,serif', fontSize:'1rem', color:'#C9A84C' }}>{origName[0].toUpperCase()}</div>
+            }
+          </div>
+          <div>
+            <div style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.8rem', fontWeight:600, color:'#F5ECD7' }}>{origName}</div>
+            {origProfile.nip05 && <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:'0.48rem', color:'#C9A84C' }}>{origProfile.nip05}</div>}
+          </div>
+        </div>
+        <div style={{ fontFamily:'Cormorant Garamond,serif', fontSize:'1rem', color:'rgba(245,236,215,0.85)', lineHeight:1.65, marginBottom:10 }}>
+          {original.content}
+        </div>
+        <div style={{ display:'flex', justifyContent:'flex-end' }}>
+          <button onClick={()=>onComment && onComment(original)}
+            style={{ display:'flex', alignItems:'center', gap:5, background:'none', border:'none', cursor:'pointer', color:'rgba(245,236,215,0.3)', fontFamily:'Montserrat,sans-serif', fontSize:'0.6rem', padding:'4px 8px', borderRadius:6 }}>
+            <MessageCircle size={13}/> Reply
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost }) {
   const profile = profiles[event.pubkey] || {}
   const npub = (() => { try { return nip19.npubEncode(event.pubkey) } catch { return '' } })()
   const name = profile.name || profile.display_name || shortKey(npub)
@@ -413,13 +469,16 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment }) {
       const ev = finalizeEvent({
         kind: 6,
         created_at: Math.floor(Date.now() / 1000),
-        tags: [['e', event.id, RELAYS[0], 'mention'], ['p', event.pubkey]],
+        tags: [['e', event.id, RELAYS[0], 'mention'], ['p', event.pubkey], ['t', 'satscode']],
         content: JSON.stringify(event),
       }, skBytes)
       await Promise.any(getPool().publish(RELAYS, ev))
       setReposted(true)
       setReposts(n => n + 1)
       flashMsg('Reposted!')
+      // Inject repost card into feed immediately — don't wait for relay echo
+      const k6card = { ...ev, _original: event }
+      onRepost && onRepost(k6card)
     } catch { flashMsg('Repost failed', false) }
   }
 
@@ -851,18 +910,28 @@ function ThreadSheet({ event, profiles, user, onClose }) {
     return Math.floor(s/86400)+'d ago'
   })()
 
+  const seenReplies = useRef(new Set())
   useEffect(() => {
-    const seen = new Set()
+    seenReplies.current = new Set()
+    setReplies([])
+    setReplyProfs({})
+    setLoading(true)
+    const authorsSeen = new Set()
     const sub = pool.subscribe(RELAYS, { kinds:[1], '#e':[event.id], limit:100 }, {
       onevent(e) {
-        if (seen.has(e.id)) return
-        seen.add(e.id)
-        setReplies(prev => [...prev, e].sort((a,b) => a.created_at - b.created_at))
-        // fetch profile
-        const rSub = pool.subscribe(RELAYS, { kinds:[0], authors:[e.pubkey], limit:1 }, {
-          onevent(pe) { try { setReplyProfs(prev => ({...prev, [pe.pubkey]: JSON.parse(pe.content)})) } catch {} },
-          oneose() { rSub.close() }
+        if (seenReplies.current.has(e.id)) return
+        seenReplies.current.add(e.id)
+        setReplies(prev => {
+          const next = [...prev, e].sort((a,b) => a.created_at - b.created_at)
+          return next
         })
+        if (!authorsSeen.has(e.pubkey)) {
+          authorsSeen.add(e.pubkey)
+          const rSub = pool.subscribe(RELAYS, { kinds:[0], authors:[e.pubkey], limit:1 }, {
+            onevent(pe) { try { setReplyProfs(prev => ({...prev, [pe.pubkey]: JSON.parse(pe.content)})) } catch {} },
+            oneose() { rSub.close() }
+          })
+        }
       },
       oneose() { setLoading(false) }
     })
@@ -1123,9 +1192,9 @@ export default function Feed({ user }) {
     }
 
     const filter =
-      source === 'satscode'             ? { kinds: [1], '#t': ['satscode'],   since: Math.floor(Date.now()/1000) - 86400 * 3, limit: 50 } :
-      source === 'bitcoin'              ? { kinds: [1], '#t': ['bitcoin'],    since: Math.floor(Date.now()/1000) - 86400,     limit: 50 } :
-      source === 'custom' && customTag  ? { kinds: [1], '#t': [customTag],    since: Math.floor(Date.now()/1000) - 86400 * 7, limit: 50 } :
+      source === 'satscode'             ? { kinds: [1,6], '#t': ['satscode'],   since: Math.floor(Date.now()/1000) - 86400 * 3, limit: 50 } :
+      source === 'bitcoin'              ? { kinds: [1,6], '#t': ['bitcoin'],    since: Math.floor(Date.now()/1000) - 86400,     limit: 50 } :
+      source === 'custom' && customTag  ? { kinds: [1,6], '#t': [customTag],    since: Math.floor(Date.now()/1000) - 86400 * 7, limit: 50 } :
       null
 
     if (!filter) { setLoading(false); return }
@@ -1166,6 +1235,26 @@ export default function Feed({ user }) {
 
           cache.seenIds.add(event.id)
 
+          // Handle kind:6 reposts — store the k6 event itself, render as RepostCard
+          if (event.kind === 6) {
+            try {
+              if (cache.seenIds.has(event.id)) return
+              cache.seenIds.add(event.id)
+              const original = JSON.parse(event.content)
+              if (!original || !original.id) return
+              // Store k6 event with original embedded
+              const k6card = { ...event, _original: original }
+              fetchProfiles([event.pubkey, original.pubkey], cacheKey)
+              if (isInitial.current) {
+                batch.push(k6card)
+              } else {
+                cache.posts = [k6card, ...cache.posts].slice(0,100)
+                setNewPosts(prev => [k6card, ...prev])
+              }
+            } catch {}
+            return
+          }
+
           if (isInitial.current) {
             batch.push(event)
             clearTimeout(batchTimer)
@@ -1205,6 +1294,7 @@ export default function Feed({ user }) {
           delSub.close()
 
           feedSub = startFeed()
+
         }
       }
     )
@@ -1355,7 +1445,11 @@ export default function Feed({ user }) {
         )}
 
         {/* Posts */}
-        {filtered.map(e => <PostCard key={e.id} event={e} profiles={profiles} onAvatarClick={(pk, pr) => setSelectedProfile({ pubkey: pk, profile: pr })} onDM={(pk, pr) => { setActiveDMPeer({ pubkey: pk, profile: pr }) }} onComment={(ev) => setActiveThread(ev)} />)}
+        {filtered.map(e =>
+          e.kind === 6
+            ? <RepostCard key={e.id} event={e} profiles={profiles} onAvatarClick={(pk, pr) => setSelectedProfile({ pubkey: pk, profile: pr })} onComment={(ev) => setActiveThread(ev)} />
+            : <PostCard key={e.id} event={e} profiles={profiles} onAvatarClick={(pk, pr) => setSelectedProfile({ pubkey: pk, profile: pr })} onDM={(pk, pr) => { setActiveDMPeer({ pubkey: pk, profile: pr }) }} onComment={(ev) => setActiveThread(ev)} onRepost={(k6) => { setPosts(prev => [k6, ...prev]) }} />
+        )}
 
       </div>
 
