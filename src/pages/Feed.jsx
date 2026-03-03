@@ -928,6 +928,61 @@ export default function Feed({ user }) {
     const cacheKey = source === 'custom' ? 'custom' : source
     const cache = feedCache[cacheKey] || feedCache.satscode
 
+    // Following has its own fetch flow — handle before filter check
+    if (source === 'following') {
+      const myPubkey = (() => { try { return JSON.parse(localStorage.getItem('satscode_user')||'{}').pubkey||null } catch { return null } })()
+      if (!myPubkey) { setLoading(false); return }
+
+      let best = null
+      const k3sub = pool.subscribe(RELAYS, { kinds:[3], authors:[myPubkey], limit:1 }, {
+        onevent(e) {
+          if (!best || e.created_at > best.created_at) best = e
+        },
+        oneose() {
+          k3sub.close()
+          const contacts = best
+            ? (best.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
+            : []
+          if (!contacts.length) { setLoading(false); return }
+
+          // Fetch profiles for all contacts upfront
+          fetchProfiles(contacts, 'following')
+
+          // Past posts — last 7 days
+          const pastFilter = { kinds:[1], authors:contacts, since: Math.floor(Date.now()/1000) - 86400*7, limit:100 }
+          const pastSub = pool.subscribe(RELAYS, pastFilter, {
+            onevent(event) {
+              if (!event.content?.trim()) return
+              if (cache.seenIds.has(event.id)) return
+              cache.seenIds.add(event.id)
+              fetchProfiles([event.pubkey], 'following')
+              cache.posts = [...cache.posts, event].sort((a,b) => b.created_at - a.created_at).slice(0,100)
+              setPosts([...cache.posts])
+            },
+            oneose() {
+              pastSub.close()
+              setLoading(false)
+            }
+          })
+
+          // Live subscription — new posts from followed users
+          feedSub = pool.subscribe(RELAYS, { kinds:[1], authors:contacts, since: Math.floor(Date.now()/1000) }, {
+            onevent(event) {
+              if (!event.content?.trim()) return
+              if (cache.seenIds.has(event.id)) return
+              cache.seenIds.add(event.id)
+              fetchProfiles([event.pubkey], 'following')
+              cache.posts = [event, ...cache.posts].slice(0,100)
+              setNewPosts(prev => [event, ...prev])
+            },
+            oneose() {}
+          })
+        }
+      })
+      setTimeout(() => { try{k3sub.close()}catch{}; setLoading(false) }, 8000)
+      return
+    }
+
     const filter =
       source === 'satscode'             ? { kinds: [1], '#t': ['satscode'],   since: Math.floor(Date.now()/1000) - 86400 * 3, limit: 50 } :
       source === 'bitcoin'              ? { kinds: [1], '#t': ['bitcoin'],    since: Math.floor(Date.now()/1000) - 86400,     limit: 50 } :
@@ -1009,38 +1064,7 @@ export default function Feed({ user }) {
         },
         oneose() {
           delSub.close()
-          // Following filter — always fetch fresh kind:3 from relay
-          if (source === 'following') {
-            const myPubkey = (() => { try { return JSON.parse(localStorage.getItem('satscode_user')||'{}').pubkey||null } catch { return null } })()
-            if (!myPubkey) { setLoading(false); return }
 
-            let started = false
-            const startFollowFeed = (contacts) => {
-              if (started || !contacts.length) { if (!contacts.length) setLoading(false); return }
-              started = true
-              try { localStorage.setItem('satscode_contacts', JSON.stringify(contacts)) } catch {}
-              const followFilter = { kinds:[1], authors:contacts, since: Math.floor(Date.now()/1000) - 86400*7, limit:100 }
-              feedSub = startFeed(followFilter)
-            }
-
-            // Try cache first for instant start
-            const cached = (() => { try { return JSON.parse(localStorage.getItem('satscode_contacts')||'[]') } catch { return [] } })()
-            if (cached.length) startFollowFeed(cached)
-
-            // Always fetch fresh from relay
-            const k3sub = pool.subscribe(RELAYS, { kinds:[3], authors:[myPubkey], limit:1 }, {
-              onevent(e) {
-                const fresh = (e.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
-                if (fresh.length) startFollowFeed(fresh)
-              },
-              oneose() {
-                k3sub.close()
-                if (!started) setLoading(false)
-              }
-            })
-            setTimeout(() => { try{k3sub.close()}catch{}; if (!started) setLoading(false) }, 7000)
-            return
-          }
           feedSub = startFeed()
         }
       }
