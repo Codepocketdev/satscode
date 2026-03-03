@@ -8,7 +8,7 @@ import {
   Zap, RefreshCw, Loader, Send, Hash, Globe, Users,
   CheckCircle, AlertCircle, Image as ImageIcon, Plus, X,
   Wrench, Trophy, Flame, SlidersHorizontal, ChevronDown,
-  Heart, Repeat2, Zap as ZapIcon, MessageCircle
+  Heart, Zap as ZapIcon, MessageCircle
 } from 'lucide-react'
 
 // ── Relays ────────────────────────────────────────────────────────────────────
@@ -88,7 +88,6 @@ const HIDDEN_PREFIXES = [
   'PRESENCE_ONLINE:','PRESENCE_OFFLINE:','FOLLOWING:','SOCIALS:',
   'BLOG_POST:','NEWS_DELETE:','EVENT_DELETE:','GROUP:','SUBMISSION:',
   'POW_BLOCK:','POW_DELETE:','ASSESSMENT_CREATE:','DELETED:','COURSES:',
-  // SatsCode internal system events — never show in feed
   'BOUNTY_ACCEPTED:','I want to claim this bounty:','BOUNTY_CLAIM:',
   'TOOL:',
 ]
@@ -122,12 +121,10 @@ function Avatar({ profile = {}, pubkey = '', size = 40 }) {
   )
 }
 
-// ── Reactions hook — fetches live like/repost counts for a post ───────────────
+// ── Reactions hook — fetches live like counts for a post ──────────────────────
 function useReactions(eventId) {
-  const [likes,   setLikes]   = useState(0)
-  const [reposts, setReposts] = useState(0)
-  const [liked,   setLiked]   = useState(false)
-  const [reposted,setReposted]= useState(false)
+  const [likes, setLikes] = useState(0)
+  const [liked, setLiked] = useState(false)
 
   useEffect(() => {
     if (!eventId) return
@@ -136,23 +133,18 @@ function useReactions(eventId) {
     })()
     const pool = getPool()
     const seen = new Set()
-    let lCount = 0, rCount = 0
+    let lCount = 0
 
     const sub = pool.subscribe(RELAYS,
-      { kinds: [6, 7], '#e': [eventId], limit: 100 },
+      { kinds: [7], '#e': [eventId], limit: 100 },
       {
         onevent(e) {
           if (seen.has(e.id)) return
           seen.add(e.id)
-          if (e.kind === 7 && (e.content === '+' || e.content === '❤️' || e.content === '🤙')) {
+          if (e.content === '+' || e.content === '❤️' || e.content === '🤙') {
             lCount++
             setLikes(lCount)
             if (myPubkey && e.pubkey === myPubkey) setLiked(true)
-          }
-          if (e.kind === 6) {
-            rCount++
-            setReposts(rCount)
-            if (myPubkey && e.pubkey === myPubkey) setReposted(true)
           }
         },
         oneose() { sub.close() }
@@ -162,13 +154,13 @@ function useReactions(eventId) {
     return () => { clearTimeout(t); try { sub.close() } catch {} }
   }, [eventId])
 
-  return { likes, reposts, liked, reposted, setLiked, setLikes, setReposted, setReposts }
+  return { likes, liked, setLiked, setLikes }
 }
 
 // ── Zap amount picker modal ────────────────────────────────────────────────────
 function ZapModal({ event, profile, onClose }) {
   const [custom, setCustom]   = useState('')
-  const [status, setStatus]   = useState('idle') // idle | fetching | done | err
+  const [status, setStatus]   = useState('idle')
   const [errMsg, setErrMsg]   = useState('')
   const lnAddress = profile?.lud16 || profile?.lud06 || null
   const AMOUNTS = [1, 21, 100, 500, 1000, 5000]
@@ -176,11 +168,9 @@ function ZapModal({ event, profile, onClose }) {
   const zap = async (sats) => {
     setStatus('fetching')
     try {
-      // Resolve lightning address — check profile props first, then fetch fresh from relay
       let resolvedAddress = profile?.lud16 || profile?.lud06 || null
 
       if (!resolvedAddress) {
-        // Try fetching fresh kind:0 from relay in case cached profile is stale
         const freshProfile = await new Promise((resolve) => {
           const pool = getPool()
           const sub = pool.subscribe(RELAYS, { kinds:[0], authors:[event.pubkey], limit:1 }, {
@@ -194,17 +184,14 @@ function ZapModal({ event, profile, onClose }) {
 
       if (!resolvedAddress) { setErrMsg('This user has no Lightning address'); setStatus('err'); return }
 
-      // Handle lud06 (raw LNURL bech32) vs lud16 (Lightning Address user@domain)
       let lnurlData
       if (resolvedAddress.toLowerCase().startsWith('lnurl')) {
-        // Decode bech32 LNURL
         const { decode } = await import('nostr-tools/nip19')
         const decoded = atob(resolvedAddress.replace(/lnurl1/i,'').replace(/[^a-z0-9]/gi,''))
         const lnurlRes = await fetch(decoded)
         if (!lnurlRes.ok) throw new Error('Could not reach Lightning provider')
         lnurlData = await lnurlRes.json()
       } else {
-        // Standard Lightning Address user@domain
         const [user, domain] = resolvedAddress.split('@')
         if (!user || !domain) throw new Error('Invalid Lightning address format')
         const lnurlRes = await fetch(`https://${domain}/.well-known/lnurlp/${user}`)
@@ -216,7 +203,6 @@ function ZapModal({ event, profile, onClose }) {
       if (msats < lnurlData.minSendable || msats > lnurlData.maxSendable)
         throw new Error(`Amount must be ${lnurlData.minSendable/1000}–${lnurlData.maxSendable/1000} sats`)
 
-      // Build NIP-57 zap request event
       const nsec = localStorage.getItem('satscode_nsec')
       let zapRequest = null
       if (nsec) {
@@ -235,7 +221,6 @@ function ZapModal({ event, profile, onClose }) {
         }, skBytes)
       }
 
-      // Fetch invoice
       const callbackUrl = new URL(lnurlData.callback)
       callbackUrl.searchParams.set('amount', String(msats))
       if (zapRequest) callbackUrl.searchParams.set('nostr', JSON.stringify(zapRequest))
@@ -243,7 +228,6 @@ function ZapModal({ event, profile, onClose }) {
       const invData = await invRes.json()
       if (!invData.pr) throw new Error('No invoice returned')
 
-      // Open in wallet
       window.open(`lightning:${invData.pr}`, '_blank')
       setStatus('done')
       setTimeout(onClose, 1200)
@@ -266,7 +250,6 @@ function ZapModal({ event, profile, onClose }) {
       <div style={{ width: '100%', maxWidth: 480, background: S.card2, border: `1px solid rgba(201,168,76,0.3)`, borderRadius: '18px 18px 0 0', padding: '20px 20px 44px', animation: 'slideUp .25s ease' }}>
         <div style={{ width: 36, height: 3, background: 'rgba(201,168,76,0.2)', borderRadius: 2, margin: '0 auto 18px' }}/>
 
-        {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
           <ZapIcon size={18} color={S.gold}/>
           <div>
@@ -281,7 +264,6 @@ function ZapModal({ event, profile, onClose }) {
           </div>
         </div>
 
-        {/* Amount grid */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 14 }}>
           {AMOUNTS.map(amt => (
             <button key={amt} onClick={() => handleZap(amt)}
@@ -304,7 +286,6 @@ function ZapModal({ event, profile, onClose }) {
           ))}
         </div>
 
-        {/* Custom amount */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           <input
             type="number" min="1" value={custom}
@@ -320,7 +301,6 @@ function ZapModal({ event, profile, onClose }) {
           </button>
         </div>
 
-        {/* Status */}
         {status === 'err' && (
           <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 9, fontFamily: 'Montserrat,sans-serif', fontSize: '0.7rem', color: S.red }}>
             {errMsg}
@@ -342,7 +322,7 @@ function ZapModal({ event, profile, onClose }) {
   )
 }
 
-// ── Reusable action button — icon + count, screenshot style ─────────────────
+// ── Reusable action button ────────────────────────────────────────────────────
 function ActionBtn({ onClick, icon, count, activeColor, active, hoverBg }) {
   return (
     <button onClick={onClick} style={{
@@ -370,71 +350,15 @@ function ActionBtn({ onClick, icon, count, activeColor, active, hoverBg }) {
 }
 
 // ── Post card ─────────────────────────────────────────────────────────────────
-
-function RepostCard({ event, profiles, onAvatarClick, onComment }) {
-  const reposterProfile = profiles[event.pubkey] || {}
-  const reposterName = reposterProfile.name || reposterProfile.display_name || event.pubkey.slice(0,10)+'...'
-  const original = event._original
-  const origProfile = profiles[original && original.pubkey] || {}
-  const origName = origProfile.name || origProfile.display_name || (original && original.pubkey ? original.pubkey.slice(0,10)+'...' : '?')
-  const timeAgoStr = (() => {
-    const s = Math.floor(Date.now()/1000) - event.created_at
-    if (s < 60) return 'just now'
-    if (s < 3600) return Math.floor(s/60)+'m ago'
-    if (s < 86400) return Math.floor(s/3600)+'h ago'
-    return Math.floor(s/86400)+'d ago'
-  })()
-  if (!original) return null
-  return (
-    <div style={{ marginBottom:12 }}>
-      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'0 4px 6px' }}>
-        {reposterProfile.picture
-          ? <img src={reposterProfile.picture} onError={e=>e.target.style.display='none'} style={{ width:18, height:18, borderRadius:'50%', objectFit:'cover', border:'1px solid rgba(34,197,94,0.4)', flexShrink:0 }}/>
-          : <div style={{ width:18, height:18, borderRadius:'50%', background:'rgba(34,197,94,0.1)', border:'1px solid rgba(34,197,94,0.4)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Cormorant Garamond,serif', fontSize:'0.55rem', color:'#22c55e', flexShrink:0 }}>{reposterName[0]}</div>
-        }
-        <Repeat2 size={11} color='#22c55e'/>
-        <span style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.55rem', fontWeight:600, color:'rgba(34,197,94,0.8)' }}>{reposterName} reposted</span>
-        <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:'0.45rem', color:'rgba(245,236,215,0.2)', marginLeft:'auto' }}>{timeAgoStr}</span>
-      </div>
-      <div style={{ background:S.card, border:'1px solid rgba(34,197,94,0.2)', borderRadius:12, padding:'14px 16px 10px' }}
-        onMouseEnter={e=>e.currentTarget.style.borderColor='rgba(34,197,94,0.4)'}
-        onMouseLeave={e=>e.currentTarget.style.borderColor='rgba(34,197,94,0.2)'}
-      >
-        <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:10 }}>
-          <div onClick={()=>onAvatarClick && onAvatarClick(original.pubkey, origProfile)} style={{ cursor:'pointer', flexShrink:0 }}>
-            {origProfile.picture
-              ? <img src={origProfile.picture} onError={e=>e.target.style.display='none'} style={{ width:38, height:38, borderRadius:'50%', objectFit:'cover', border:'1px solid rgba(201,168,76,0.3)' }}/>
-              : <div style={{ width:38, height:38, borderRadius:'50%', background:'rgba(201,168,76,0.08)', border:'1px solid rgba(201,168,76,0.25)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Cormorant Garamond,serif', fontSize:'1rem', color:'#C9A84C' }}>{origName[0].toUpperCase()}</div>
-            }
-          </div>
-          <div>
-            <div style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.8rem', fontWeight:600, color:'#F5ECD7' }}>{origName}</div>
-            {origProfile.nip05 && <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:'0.48rem', color:'#C9A84C' }}>{origProfile.nip05}</div>}
-          </div>
-        </div>
-        <div style={{ fontFamily:'Cormorant Garamond,serif', fontSize:'1rem', color:'rgba(245,236,215,0.85)', lineHeight:1.65, marginBottom:10 }}>
-          {original.content}
-        </div>
-        <div style={{ display:'flex', justifyContent:'flex-end' }}>
-          <button onClick={()=>onComment && onComment(original)}
-            style={{ display:'flex', alignItems:'center', gap:5, background:'none', border:'none', cursor:'pointer', color:'rgba(245,236,215,0.3)', fontFamily:'Montserrat,sans-serif', fontSize:'0.6rem', padding:'4px 8px', borderRadius:6 }}>
-            <MessageCircle size={13}/> Reply
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost }) {
+function PostCard({ event, profiles, onAvatarClick, onDM, onComment }) {
   const profile = profiles[event.pubkey] || {}
   const npub = (() => { try { return nip19.npubEncode(event.pubkey) } catch { return '' } })()
   const name = profile.name || profile.display_name || shortKey(npub)
   const type = detectType(event.content, event.tags || [])
   const typeConf = TYPE_CONFIG[type]
-  const { likes, reposts, liked, reposted, setLiked, setLikes, setReposted, setReposts } = useReactions(event.id)
+  const { likes, liked, setLiked, setLikes } = useReactions(event.id)
   const [showZap, setShowZap] = useState(false)
-  const [actionMsg, setActionMsg] = useState(null) // { text, ok }
+  const [actionMsg, setActionMsg] = useState(null)
 
   const flashMsg = (text, ok = true) => {
     setActionMsg({ text, ok })
@@ -458,28 +382,6 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
       setLikes(n => n + 1)
       flashMsg('Liked!')
     } catch { flashMsg('Like failed', false) }
-  }
-
-  const handleRepost = async () => {
-    if (reposted) return
-    const nsec = localStorage.getItem('satscode_nsec')
-    if (!nsec) { flashMsg('Log in to repost', false); return }
-    try {
-      const { data: skBytes } = nip19.decode(nsec.trim())
-      const ev = finalizeEvent({
-        kind: 6,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [['e', event.id, RELAYS[0], 'mention'], ['p', event.pubkey], ['t', 'satscode']],
-        content: JSON.stringify(event),
-      }, skBytes)
-      await Promise.any(getPool().publish(RELAYS, ev))
-      setReposted(true)
-      setReposts(n => n + 1)
-      flashMsg('Reposted!')
-      // Inject repost card into feed immediately — don't wait for relay echo
-      const k6card = { ...ev, _original: event }
-      onRepost && onRepost(k6card)
-    } catch { flashMsg('Repost failed', false) }
   }
 
   const isImageUrl = (url) =>
@@ -509,7 +411,6 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
         onMouseEnter={e => e.currentTarget.style.borderColor = S.borderHover}
         onMouseLeave={e => e.currentTarget.style.borderColor = S.border}
       >
-        {/* Type badge */}
         {typeConf.icon && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 10 }}>
             <typeConf.icon size={11} color={typeConf.color} />
@@ -519,7 +420,6 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
           </div>
         )}
 
-        {/* Header */}
         <div style={{ display: 'flex', gap: 10, marginBottom: 12, alignItems: 'center' }}>
           <div onClick={() => onAvatarClick && onAvatarClick(event.pubkey, profile)} style={{ cursor: 'pointer' }}>
             <Avatar profile={profile} pubkey={event.pubkey} size={40} />
@@ -539,7 +439,6 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
           </div>
         </div>
 
-        {/* Content — bounty posts get structured rendering */}
         {type === 'bounty' && event.content.startsWith('BOUNTY:') ? (() => {
           const lines = event.content.split('\n')
           const title = lines[0]?.replace('BOUNTY:','').trim() || ''
@@ -570,10 +469,7 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
           </div>
         )}
 
-        {/* ── Action bar — matches screenshot style ── */}
         <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-
-          {/* Zap — gold, left-most, most prominent */}
           <ActionBtn
             onClick={() => setShowZap(true)}
             icon={<ZapIcon size={15} />}
@@ -582,8 +478,6 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
             active={false}
             hoverBg='rgba(201,168,76,0.08)'
           />
-
-          {/* Like */}
           <ActionBtn
             onClick={handleLike}
             icon={<Heart size={15} fill={liked ? '#ef4444' : 'none'} />}
@@ -592,8 +486,6 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
             active={liked}
             hoverBg='rgba(239,68,68,0.06)'
           />
-
-          {/* Comment */}
           <ActionBtn
             onClick={() => onComment && onComment(event)}
             icon={<MessageCircle size={15} />}
@@ -602,18 +494,6 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
             active={false}
             hoverBg='rgba(201,168,76,0.06)'
           />
-
-          {/* Repost */}
-          <ActionBtn
-            onClick={handleRepost}
-            icon={<Repeat2 size={15} />}
-            count={reposts}
-            activeColor='#22c55e'
-            active={reposted}
-            hoverBg='rgba(34,197,94,0.06)'
-          />
-
-          {/* Flash msg */}
           {actionMsg && (
             <span style={{
               fontFamily: 'Montserrat,sans-serif', fontSize: '0.58rem', fontWeight: 600,
@@ -626,19 +506,14 @@ function PostCard({ event, profiles, onAvatarClick, onDM, onComment, onRepost })
         </div>
       </div>
 
-      {/* Zap modal */}
       {showZap && (
-        <ZapModal
-          event={event}
-          profile={profile}
-          onClose={() => setShowZap(false)}
-        />
+        <ZapModal event={event} profile={profile} onClose={() => setShowZap(false)} />
       )}
     </>
   )
 }
 
-// ── NIP-98 signed upload — works with nostr.build + fallback to nostrcheck.me ──
+// ── NIP-98 signed upload ──────────────────────────────────────────────────────
 async function buildNip98Auth(uploadUrl, method = 'POST') {
   const nsec = localStorage.getItem('satscode_nsec')
   if (!nsec) throw new Error('No private key found')
@@ -657,62 +532,27 @@ async function buildNip98Auth(uploadUrl, method = 'POST') {
 
 async function uploadImage(file) {
   const PROVIDERS = [
-    {
-      name: 'nostr.build',
-      url: 'https://nostr.build/api/v2/upload/files',
-      field: 'fileToUpload',
-      getUrl: (json) => json?.data?.[0]?.url,
-      needsAuth: true,
-    },
-    {
-      name: 'nostrcheck.me',
-      url: 'https://nostrcheck.me/api/v2/media',
-      field: 'uploadedfile',
-      getUrl: (json) => json?.url || json?.data?.url,
-      needsAuth: true,
-    },
-    {
-      name: 'nostr.build (legacy)',
-      url: 'https://nostr.build/api/upload/image',
-      field: 'fileToUpload',
-      getUrl: (json) => json?.data?.display_url || json?.data?.url,
-      needsAuth: false,
-    },
+    { name: 'nostr.build',        url: 'https://nostr.build/api/v2/upload/files',  field: 'fileToUpload',  getUrl: (j) => j?.data?.[0]?.url,                         needsAuth: true  },
+    { name: 'nostrcheck.me',      url: 'https://nostrcheck.me/api/v2/media',        field: 'uploadedfile',  getUrl: (j) => j?.url || j?.data?.url,                     needsAuth: true  },
+    { name: 'nostr.build (legacy)',url: 'https://nostr.build/api/upload/image',     field: 'fileToUpload',  getUrl: (j) => j?.data?.display_url || j?.data?.url,       needsAuth: false },
   ]
-
   let lastError = 'All upload providers failed'
-
   for (const provider of PROVIDERS) {
     try {
       const formData = new FormData()
       formData.append(provider.field, file)
-
       const headers = {}
       if (provider.needsAuth) {
-        try {
-          headers['Authorization'] = await buildNip98Auth(provider.url, 'POST')
-        } catch {
-          // no key — skip auth, try anyway
-        }
+        try { headers['Authorization'] = await buildNip98Auth(provider.url, 'POST') } catch {}
       }
-
       const res = await fetch(provider.url, { method: 'POST', headers, body: formData })
-
-      if (!res.ok) {
-        lastError = `${provider.name}: HTTP ${res.status}`
-        continue
-      }
-
+      if (!res.ok) { lastError = `${provider.name}: HTTP ${res.status}`; continue }
       const json = await res.json()
       const url = provider.getUrl(json)
-
       if (url) return url
       lastError = `${provider.name}: no URL in response`
-    } catch (e) {
-      lastError = `${provider.name}: ${e.message}`
-    }
+    } catch (e) { lastError = `${provider.name}: ${e.message}` }
   }
-
   throw new Error(lastError)
 }
 
@@ -743,9 +583,7 @@ function ComposeModal({ user, profiles, onClose, onPublished }) {
       setPreviewImg(url)
       setText(prev => prev ? prev + '\n' + url : url)
       taRef.current?.focus()
-    } catch (e) {
-      setErrMsg(e.message || 'Upload failed')
-    }
+    } catch (e) { setErrMsg(e.message || 'Upload failed') }
     setUploading(false)
   }
 
@@ -794,7 +632,6 @@ function ComposeModal({ user, profiles, onClose, onPublished }) {
       <div style={{ background: S.card2, border: `1px solid rgba(201,168,76,0.25)`, borderRadius: '16px 16px 0 0', width: '100%', maxWidth: 640, padding: '20px 20px 40px', animation: 'slideUp .25s ease' }}>
         <div style={{ width: 36, height: 3, background: 'rgba(201,168,76,0.25)', borderRadius: 2, margin: '0 auto 16px' }}/>
 
-        {/* Post type selector */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
           {TYPE_OPTS.map(t => (
             <button key={t.id} onClick={() => setPostType(t.id)} style={{
@@ -813,7 +650,6 @@ function ComposeModal({ user, profiles, onClose, onPublished }) {
           ))}
         </div>
 
-        {/* Compose area */}
         <div style={{ display: 'flex', gap: 12 }}>
           <Avatar profile={profile} pubkey={user?.pubkey} size={42} />
           <div style={{ flex: 1 }}>
@@ -843,7 +679,6 @@ function ComposeModal({ user, profiles, onClose, onPublished }) {
           </div>
         </div>
 
-        {/* Footer */}
         <div style={{ borderTop: `1px solid ${S.border}`, marginTop: 14, paddingTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontFamily: 'JetBrains Mono,monospace', fontSize: '0.65rem', color: text.length > 250 ? S.red : 'rgba(201,168,76,0.3)' }}>
@@ -888,16 +723,14 @@ function ComposeModal({ user, profiles, onClose, onPublished }) {
   )
 }
 
-// ── Main Feed ─────────────────────────────────────────────────────────────────
-
 // ─── Thread / Comments Sheet ──────────────────────────────────────────────────
 function ThreadSheet({ event, profiles, user, onClose }) {
-  const [replies,     setReplies]     = useState([])
-  const [replyProfs,  setReplyProfs]  = useState({})
-  const [loading,     setLoading]     = useState(true)
-  const [text,        setText]        = useState('')
-  const [posting,     setPosting]     = useState(false)
-  const [postedOk,    setPostedOk]    = useState(false)
+  const [replies,    setReplies]    = useState([])
+  const [replyProfs, setReplyProfs] = useState({})
+  const [loading,    setLoading]    = useState(true)
+  const [text,       setText]       = useState('')
+  const [posting,    setPosting]    = useState(false)
+  const [postedOk,   setPostedOk]   = useState(false)
 
   const pool = getPool()
   const author = profiles[event.pubkey] || {}
@@ -921,10 +754,7 @@ function ThreadSheet({ event, profiles, user, onClose }) {
       onevent(e) {
         if (seenReplies.current.has(e.id)) return
         seenReplies.current.add(e.id)
-        setReplies(prev => {
-          const next = [...prev, e].sort((a,b) => a.created_at - b.created_at)
-          return next
-        })
+        setReplies(prev => [...prev, e].sort((a,b) => a.created_at - b.created_at))
         if (!authorsSeen.has(e.pubkey)) {
           authorsSeen.add(e.pubkey)
           const rSub = pool.subscribe(RELAYS, { kinds:[0], authors:[e.pubkey], limit:1 }, {
@@ -968,10 +798,8 @@ function ThreadSheet({ event, profiles, user, onClose }) {
       <div style={{ width:'100%', background:S2.bg, borderRadius:'18px 18px 0 0', border:'1px solid '+S2.borderMid, maxHeight:'88vh', display:'flex', flexDirection:'column', animation:'slideUp .25s ease' }}>
         <style>{`@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}} @keyframes spin{to{transform:rotate(360deg)}}`}</style>
 
-        {/* Handle + header */}
         <div style={{ padding:'14px 16px 10px', borderBottom:'1px solid '+S2.border, flexShrink:0 }}>
           <div style={{ width:36, height:3, background:'rgba(201,168,76,0.2)', borderRadius:2, margin:'0 auto 14px' }}/>
-          {/* Original post */}
           <div style={{ display:'flex', gap:10, alignItems:'flex-start' }}>
             {author.picture
               ? <img src={author.picture} onError={e=>e.target.style.display='none'} style={{ width:36, height:36, borderRadius:'50%', objectFit:'cover', border:'1px solid '+S2.border, flexShrink:0 }}/>
@@ -991,7 +819,6 @@ function ThreadSheet({ event, profiles, user, onClose }) {
           </div>
         </div>
 
-        {/* Replies list */}
         <div style={{ flex:1, overflowY:'auto', padding:'8px 16px' }}>
           {loading && <div style={{ textAlign:'center', padding:'24px 0' }}><Loader size={18} color={S2.gold} style={{ animation:'spin 1s linear infinite', display:'block', margin:'0 auto' }}/></div>}
           {!loading && replies.length === 0 && (
@@ -1019,7 +846,6 @@ function ThreadSheet({ event, profiles, user, onClose }) {
           })}
         </div>
 
-        {/* Reply input */}
         {user && (
           <div style={{ padding:'12px 16px', borderTop:'1px solid '+S2.border, flexShrink:0, paddingBottom:'calc(env(safe-area-inset-bottom,0px) + 12px)' }}>
             <div style={{ display:'flex', gap:8, alignItems:'flex-end' }}>
@@ -1037,28 +863,28 @@ function ThreadSheet({ event, profiles, user, onClose }) {
   )
 }
 
+// ── Main Feed ─────────────────────────────────────────────────────────────────
 export default function Feed({ user }) {
   const _prefs        = loadFeedPrefs()
   const initSource     = _prefs.source     || 'satscode'
   const initCustomTag  = _prefs.customTag  || ''
   const initTypeFilter = _prefs.typeFilter || 'all'
 
-  const [source,         setSource]        = useState(initSource)
-  const [typeFilter,     setTypeFilter]     = useState(initTypeFilter)
-  const [posts,          setPosts]          = useState(feedCache[initSource]?.posts    || feedCache.satscode.posts)
-  const [profiles,       setProfiles]       = useState(feedCache[initSource]?.profiles || feedCache.satscode.profiles)
-  const [loading,        setLoading]        = useState((feedCache[initSource]?.posts   || feedCache.satscode.posts).length === 0)
-  const [newPosts,       setNewPosts]       = useState([])
-  const [showCompose,    setShowCompose]    = useState(false)
-  const [selectedProfile, setSelectedProfile] = useState(null) // { pubkey, profile }
-  const [activeDMPeer,   setActiveDMPeer]   = useState(null)
-  const [activeThread,   setActiveThread]   = useState(null) // event
-  const [showSourceMenu, setShowSourceMenu] = useState(false)
-  const [customTag,      setCustomTag]      = useState(initCustomTag)
-  const [customTagInput, setCustomTagInput] = useState('')
+  const [source,          setSource]         = useState(initSource)
+  const [typeFilter,      setTypeFilter]      = useState(initTypeFilter)
+  const [posts,           setPosts]           = useState(feedCache[initSource]?.posts    || feedCache.satscode.posts)
+  const [profiles,        setProfiles]        = useState(feedCache[initSource]?.profiles || feedCache.satscode.profiles)
+  const [loading,         setLoading]         = useState((feedCache[initSource]?.posts   || feedCache.satscode.posts).length === 0)
+  const [newPosts,        setNewPosts]        = useState([])
+  const [showCompose,     setShowCompose]     = useState(false)
+  const [selectedProfile, setSelectedProfile] = useState(null)
+  const [activeDMPeer,    setActiveDMPeer]    = useState(null)
+  const [activeThread,    setActiveThread]    = useState(null)
+  const [showSourceMenu,  setShowSourceMenu]  = useState(false)
+  const [customTag,       setCustomTag]       = useState(initCustomTag)
+  const [customTagInput,  setCustomTagInput]  = useState('')
   const isInitial = useRef((feedCache[initSource]?.posts || feedCache.satscode.posts).length === 0)
 
-  // Type tabs with Lucide icons
   const TYPE_TABS = [
     { id: 'all',       label: 'All',        Icon: null    },
     { id: 'ship',      label: 'Ships',      Icon: Wrench  },
@@ -1066,31 +892,27 @@ export default function Feed({ user }) {
     { id: 'milestone', label: 'Milestones', Icon: Trophy  },
   ]
 
-  // ── Live kind:5 deletion subscription ──────────────────────────────────────
+  // ── Live kind:5 deletion subscription ────────────────────────────────────────
   useEffect(() => {
     const pool = getPool()
     const sub = pool.subscribe(RELAYS,
-      { kinds: [5], since: Math.floor(Date.now()/1000) - 60 }, // 60s buffer to catch recent deletes
+      { kinds: [5], since: Math.floor(Date.now()/1000) - 60 },
       {
         onevent(e) {
-          const deletedEventIds = (e.tags||[])
-            .filter(t => t[0]==='e' && t[1])
-            .map(t => t[1])
+          const deletedEventIds = (e.tags||[]).filter(t => t[0]==='e' && t[1]).map(t => t[1])
           if (!deletedEventIds.length) return
-          // Remove from posts state immediately
           setPosts(prev => prev.filter(p => !deletedEventIds.includes(p.id)))
           setNewPosts(prev => prev.filter(p => !deletedEventIds.includes(p.id)))
-          // Also clean feedCache
           Object.values(feedCache).forEach(cache => {
             cache.posts = cache.posts.filter(p => !deletedEventIds.includes(p.id))
             deletedEventIds.forEach(id => cache.seenIds.delete(id))
           })
         },
-        oneose() {} // keep subscription alive — no close
+        oneose() {}
       }
     )
     return () => { try { sub.close() } catch {} }
-  }, []) // runs once, stays alive
+  }, [])
 
   const switchSource = (newSource) => {
     if (newSource === source) return
@@ -1136,27 +958,20 @@ export default function Feed({ user }) {
     const cacheKey = source === 'custom' ? 'custom' : source
     const cache = feedCache[cacheKey] || feedCache.satscode
 
-    // Following has its own fetch flow — handle before filter check
     if (source === 'following') {
       const myPubkey = (() => { try { return JSON.parse(localStorage.getItem('satscode_user')||'{}').pubkey||null } catch { return null } })()
       if (!myPubkey) { setLoading(false); return }
 
       let best = null
       const k3sub = pool.subscribe(RELAYS, { kinds:[3], authors:[myPubkey], limit:1 }, {
-        onevent(e) {
-          if (!best || e.created_at > best.created_at) best = e
-        },
+        onevent(e) { if (!best || e.created_at > best.created_at) best = e },
         oneose() {
           k3sub.close()
-          const contacts = best
-            ? (best.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
-            : []
+          const contacts = best ? (best.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1]) : []
           if (!contacts.length) { setLoading(false); return }
 
-          // Fetch profiles for all contacts upfront
           fetchProfiles(contacts, 'following')
 
-          // Past posts — last 7 days
           const pastFilter = { kinds:[1], authors:contacts, since: Math.floor(Date.now()/1000) - 86400*7, limit:100 }
           const pastSub = pool.subscribe(RELAYS, pastFilter, {
             onevent(event) {
@@ -1167,14 +982,10 @@ export default function Feed({ user }) {
               cache.posts = [...cache.posts, event].sort((a,b) => b.created_at - a.created_at).slice(0,100)
               setPosts([...cache.posts])
             },
-            oneose() {
-              pastSub.close()
-              setLoading(false)
-            }
+            oneose() { pastSub.close(); setLoading(false) }
           })
 
-          // Live subscription — new posts from followed users
-          feedSub = pool.subscribe(RELAYS, { kinds:[1], authors:contacts, since: Math.floor(Date.now()/1000) }, {
+          pool.subscribe(RELAYS, { kinds:[1], authors:contacts, since: Math.floor(Date.now()/1000) }, {
             onevent(event) {
               if (!event.content?.trim()) return
               if (cache.seenIds.has(event.id)) return
@@ -1192,37 +1003,31 @@ export default function Feed({ user }) {
     }
 
     const filter =
-      source === 'satscode'             ? { kinds: [1], '#t': ['satscode'],   since: Math.floor(Date.now()/1000) - 86400 * 3, limit: 50 } :
-      source === 'bitcoin'              ? { kinds: [1], '#t': ['bitcoin'],    since: Math.floor(Date.now()/1000) - 86400,     limit: 50 } :
-      source === 'custom' && customTag  ? { kinds: [1], '#t': [customTag],    since: Math.floor(Date.now()/1000) - 86400 * 7, limit: 50 } :
+      source === 'satscode'            ? { kinds: [1], '#t': ['satscode'], since: Math.floor(Date.now()/1000) - 86400 * 3, limit: 50 } :
+      source === 'bitcoin'             ? { kinds: [1], '#t': ['bitcoin'],  since: Math.floor(Date.now()/1000) - 86400,     limit: 50 } :
+      source === 'custom' && customTag ? { kinds: [1], '#t': [customTag],  since: Math.floor(Date.now()/1000) - 86400 * 7, limit: 50 } :
       null
 
     if (!filter) { setLoading(false); return }
 
     let batchTimer
     const batch = []
-    const deletedIds = new Set() // populated from kind:5 events
+    const deletedIds = new Set()
 
     const startFeed = (filterOverride) => {
       const sub = pool.subscribe(RELAYS, filterOverride || filter, {
         onevent(event) {
           if (cache.seenIds.has(event.id)) return
-          // kind:6 has JSON content — don't run text checks on it
-          if (event.kind !== 6 && !event.content?.trim()) return
-          if (event.kind !== 6 && HIDDEN_PREFIXES.some(p => event.content.startsWith(p))) return
-          if (deletedIds.has(event.id)) return  // ← skip kind:5 deleted events
-          // Filter out registry registration notes
+          if (!event.content?.trim()) return
+          if (HIDDEN_PREFIXES.some(p => event.content.startsWith(p))) return
+          if (deletedIds.has(event.id)) return
           const evTags = (event.tags || []).map(t => t[1] || '')
           if (evTags.includes('satscode-registry')) return
-          // Filter out bounty system internal events by tag
           if (evTags.includes('bounty-claim')) return
           if (evTags.includes('bounty-accepted')) return
           if (evTags.includes('deleted')) return
           if (evTags.includes('satscode-tool')) return
 
-          // ── Deletion marker: kind:1 with ["t","deleted"] tag ──────────────
-          // When a bounty is deleted it publishes a kind:1 DELETED: marker.
-          // Live feed catches it here and immediately purges the original event.
           if (evTags.includes('deleted') && event.content.startsWith('DELETED:')) {
             const refIds = (event.tags || []).filter(t => t[0]==='e' && t[1]).map(t => t[1])
             if (refIds.length) {
@@ -1231,13 +1036,10 @@ export default function Feed({ user }) {
               setPosts(prev => prev.filter(p => !refIds.includes(p.id)))
               setNewPosts(prev => prev.filter(p => !refIds.includes(p.id)))
             }
-            return // don't render the marker itself
+            return
           }
 
           cache.seenIds.add(event.id)
-
-          // kind:6 handled separately by handleK6 via authors subscription
-          if (event.kind === 6) return
 
           if (isInitial.current) {
             batch.push(event)
@@ -1266,68 +1068,12 @@ export default function Feed({ user }) {
       return sub
     }
 
-    // First fetch kind:5 deletions, then start the feed
     let feedSub
     const delSub = pool.subscribe(RELAYS,
       { kinds: [5], since: Math.floor(Date.now()/1000) - 86400 * 30, limit: 500 },
       {
-        onevent(e) {
-          ;(e.tags || []).filter(t => t[0]==='e' && t[1]).forEach(t => deletedIds.add(t[1]))
-        },
-        oneose() {
-          delSub.close()
-          feedSub = startFeed()
-
-          // ── Kind:6 repost subscription ─────────────────────────────────────────
-          // Fetch satscode registry pubkeys then subscribe to their kind:6 by authors
-          // This catches reposts from ANY Nostr client and persists across refresh
-          const since = Math.floor(Date.now()/1000) - 86400 * 7
-          const liveFrom = Math.floor(Date.now()/1000)
-
-          const handleK6 = (k6) => {
-            if (cache.seenIds.has(k6.id)) return
-            cache.seenIds.add(k6.id)
-            try {
-              const original = JSON.parse(k6.content)
-              if (!original || !original.id) return
-              // Unique id per repost — won't collide with original or other reposts of same note
-              const k6card = { ...k6, id: original.id + '_rp_' + k6.pubkey, _original: original }
-              fetchProfiles([k6.pubkey, original.pubkey], cacheKey)
-              // Remove bare original kind:1 — RepostCard replaces it
-              cache.posts = [...cache.posts, k6card].sort((a,b) => b.created_at - a.created_at).slice(0,100)
-              setPosts([...cache.posts])
-            } catch(err) { console.error('[k6]', err) }
-          }
-
-          // Immediate live WebSocket — starts NOW, no waiting for registry
-          // Catches reposts tagged #satscode from our app the moment they hit relay
-          pool.subscribe(RELAYS, { kinds:[6], '#t':['satscode'], since: liveFrom }, {
-            onevent: handleK6,
-            oneose() {}
-          })
-
-          // Registry fetch → past history + cross-client live by authors
-          const communityPubkeys = new Set()
-          const regSub = pool.subscribe(RELAYS, { kinds:[1], '#t':['satscode-registry'], limit:200 }, {
-            onevent(e) { communityPubkeys.add(e.pubkey) },
-            oneose() {
-              regSub.close()
-              const authors = [...communityPubkeys]
-              if (!authors.length) return
-              // Past 7 days — loads history on refresh
-              pool.subscribe(RELAYS, { kinds:[6], authors, since, limit:100 }, {
-                onevent: handleK6,
-                oneose() {}
-              })
-              // Cross-client live — catches Yakihonne/Damus reposts by community members
-              pool.subscribe(RELAYS, { kinds:[6], authors, since: liveFrom }, {
-                onevent: handleK6,
-                oneose() {}
-              })
-            }
-          })
-
-        }
+        onevent(e) { (e.tags || []).filter(t => t[0]==='e' && t[1]).forEach(t => deletedIds.add(t[1])) },
+        oneose() { delSub.close(); feedSub = startFeed() }
       }
     )
 
@@ -1360,7 +1106,6 @@ export default function Feed({ user }) {
 
       <div style={{ maxWidth: 680, margin: '0 auto', padding: '20px 16px 100px' }}>
 
-        {/* Header row */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
           <div>
             <h1 style={{ fontFamily: 'Cormorant Garamond,serif', fontSize: '1.8rem', fontWeight: 700, color: S.cream, marginBottom: 4 }}>
@@ -1371,7 +1116,6 @@ export default function Feed({ user }) {
             </p>
           </div>
 
-          {/* Source filter */}
           <div style={{ position: 'relative' }}>
             <button onClick={() => setShowSourceMenu(!showSourceMenu)} style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -1403,7 +1147,6 @@ export default function Feed({ user }) {
                       </button>
                     )
                   })}
-                  {/* Custom tag */}
                   <div style={{ padding: '10px 12px', borderTop: `1px solid ${S.border}` }}>
                     <div style={{ fontFamily: 'JetBrains Mono,monospace', fontSize: '0.55rem', color: 'rgba(201,168,76,0.35)', marginBottom: 6 }}>
                       // custom hashtag
@@ -1426,7 +1169,6 @@ export default function Feed({ user }) {
           </div>
         </div>
 
-        {/* Type tabs */}
         <div style={{ display: 'flex', borderBottom: `1px solid ${S.border}`, marginBottom: 16 }}>
           {TYPE_TABS.map(t => (
             <button key={t.id} onClick={() => { setTypeFilter(t.id); saveFeedPrefs({ ...loadFeedPrefs(), typeFilter: t.id }) }} style={{
@@ -1446,7 +1188,6 @@ export default function Feed({ user }) {
           ))}
         </div>
 
-        {/* New posts banner */}
         {newPosts.length > 0 && (
           <button onClick={loadNew} style={{ width: '100%', background: 'rgba(201,168,76,0.06)', border: `1px solid rgba(201,168,76,0.35)`, color: S.gold, padding: 10, borderRadius: 10, fontFamily: 'Montserrat,sans-serif', fontWeight: 600, fontSize: '0.72rem', cursor: 'pointer', marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
             <RefreshCw size={13}/>
@@ -1454,7 +1195,6 @@ export default function Feed({ user }) {
           </button>
         )}
 
-        {/* Loading */}
         {loading && (
           <div style={{ textAlign: 'center', padding: '60px 0' }}>
             <Loader size={22} color={S.gold} style={{ animation: 'spin 1s linear infinite', display: 'block', margin: '0 auto 12px' }}/>
@@ -1463,7 +1203,6 @@ export default function Feed({ user }) {
           </div>
         )}
 
-        {/* Empty */}
         {!loading && filtered.length === 0 && (
           <div style={{ textAlign: 'center', padding: '60px 0' }}>
             <Zap size={36} color={S.goldDark} style={{ margin: '0 auto 12px', display: 'block', opacity: 0.5 }}/>
@@ -1476,16 +1215,15 @@ export default function Feed({ user }) {
           </div>
         )}
 
-        {/* Posts */}
         {filtered.map(e =>
-          e.kind === 6
-            ? <RepostCard key={e.id} event={e} profiles={profiles} onAvatarClick={(pk, pr) => setSelectedProfile({ pubkey: pk, profile: pr })} onComment={(ev) => setActiveThread(ev)} />
-            : <PostCard key={e.id} event={e} profiles={profiles} onAvatarClick={(pk, pr) => setSelectedProfile({ pubkey: pk, profile: pr })} onDM={(pk, pr) => { setActiveDMPeer({ pubkey: pk, profile: pr }) }} onComment={(ev) => setActiveThread(ev)} onRepost={(k6) => { setPosts(prev => [k6, ...prev]) }} />
+          <PostCard key={e.id} event={e} profiles={profiles}
+            onAvatarClick={(pk, pr) => setSelectedProfile({ pubkey: pk, profile: pr })}
+            onDM={(pk, pr) => setActiveDMPeer({ pubkey: pk, profile: pr })}
+            onComment={(ev) => setActiveThread(ev)}
+          />
         )}
-
       </div>
 
-      {/* Floating + button */}
       <button onClick={() => setShowCompose(true)} style={{
         position: 'fixed', bottom: 88, right: 20,
         width: 54, height: 54, borderRadius: '50%',
@@ -1510,12 +1248,7 @@ export default function Feed({ user }) {
       )}
 
       {activeThread && (
-        <ThreadSheet
-          event={activeThread}
-          profiles={profiles}
-          user={user}
-          onClose={() => setActiveThread(null)}
-        />
+        <ThreadSheet event={activeThread} profiles={profiles} user={user} onClose={() => setActiveThread(null)} />
       )}
 
       {activeDMPeer && (
@@ -1542,4 +1275,3 @@ export default function Feed({ user }) {
     </>
   )
 }
-
