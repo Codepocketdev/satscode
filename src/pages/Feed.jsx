@@ -928,14 +928,10 @@ export default function Feed({ user }) {
     const cacheKey = source === 'custom' ? 'custom' : source
     const cache = feedCache[cacheKey] || feedCache.satscode
 
-    const getFollowing = () => { try { return JSON.parse(localStorage.getItem('satscode_following') || '[]') } catch { return [] } }
-    const followingHex = getFollowing().map(npub => { try { return nip19.decode(npub).data } catch { return null } }).filter(Boolean)
-
     const filter =
       source === 'satscode'             ? { kinds: [1], '#t': ['satscode'],   since: Math.floor(Date.now()/1000) - 86400 * 3, limit: 50 } :
       source === 'bitcoin'              ? { kinds: [1], '#t': ['bitcoin'],    since: Math.floor(Date.now()/1000) - 86400,     limit: 50 } :
       source === 'custom' && customTag  ? { kinds: [1], '#t': [customTag],    since: Math.floor(Date.now()/1000) - 86400 * 7, limit: 50 } :
-      followingHex.length               ? { kinds: [1], authors: followingHex, since: Math.floor(Date.now()/1000) - 86400 * 7, limit: 100 } :
       null
 
     if (!filter) { setLoading(false); return }
@@ -944,8 +940,8 @@ export default function Feed({ user }) {
     const batch = []
     const deletedIds = new Set() // populated from kind:5 events
 
-    const startFeed = () => {
-      const sub = pool.subscribe(RELAYS, filter, {
+    const startFeed = (filterOverride) => {
+      const sub = pool.subscribe(RELAYS, filterOverride || filter, {
         onevent(event) {
           if (cache.seenIds.has(event.id)) return
           if (!event.content?.trim()) return
@@ -1013,6 +1009,46 @@ export default function Feed({ user }) {
         },
         oneose() {
           delSub.close()
+          // Following filter — read from localStorage first, fallback to relay kind:3
+          if (source === 'following') {
+            const myPubkey = (() => { try { return JSON.parse(localStorage.getItem('satscode_user')||'{}').pubkey||null } catch { return null } })()
+            if (!myPubkey) { setLoading(false); return }
+
+            const cached = (() => { try { return JSON.parse(localStorage.getItem('satscode_contacts')||'[]') } catch { return [] } })()
+
+            const startFollowFeed = (contacts) => {
+              if (!contacts.length) { setLoading(false); return }
+              const followFilter = { kinds:[1], authors:contacts, since: Math.floor(Date.now()/1000) - 86400*7, limit:100 }
+              feedSub = startFeed(followFilter)
+            }
+
+            if (cached.length) {
+              // Use cache immediately, then refresh in background
+              startFollowFeed(cached)
+              pool.subscribe(RELAYS, { kinds:[3], authors:[myPubkey], limit:1 }, {
+                onevent(e) {
+                  const fresh = (e.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
+                  try { localStorage.setItem('satscode_contacts', JSON.stringify(fresh)) } catch {}
+                },
+                oneose() {}
+              })
+            } else {
+              // No cache — fetch from relay
+              let followingHex = []
+              const k3sub = pool.subscribe(RELAYS, { kinds:[3], authors:[myPubkey], limit:1 }, {
+                onevent(e) {
+                  followingHex = (e.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
+                  try { localStorage.setItem('satscode_contacts', JSON.stringify(followingHex)) } catch {}
+                },
+                oneose() {
+                  k3sub.close()
+                  startFollowFeed(followingHex)
+                }
+              })
+              setTimeout(() => { try{k3sub.close()}catch{}; setLoading(false) }, 6000)
+            }
+            return
+          }
           feedSub = startFeed()
         }
       }

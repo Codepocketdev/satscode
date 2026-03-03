@@ -10,6 +10,7 @@ import MessagesPage from './pages/MessagesPage'
 import Settings from './pages/Settings'
 import SubmitTool from './pages/SubmitTool'
 import ProofOfWork from './pages/ProofOfWork'
+import FollowList from './pages/FollowList'
 import Registry from './pages/Registry'
 import Stack from './pages/Stack'
 import Bounties from './pages/Bounties'
@@ -107,6 +108,7 @@ export default function App() {
                 <Route path="/registry"       element={<Registry user={user} />} />
                 <Route path="/bounties"       element={<Bounties user={user} />} />
                 <Route path="/pow"            element={<ProofOfWork user={user} />} />
+                <Route path="/follow/:type/:npub" element={<FollowList />} />
                 <Route path="/stack"          element={<Stack />} />
                 <Route path="/profile"        element={<ProfilePage user={user} onUserUpdate={u => { setUser(u); localStorage.setItem('satscode_user', JSON.stringify(u)) }} />} />
                 <Route path="/messages"       element={<MessagesPage user={user} />} />

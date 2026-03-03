@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useFollow } from './useFollow'
 import { SimplePool } from 'nostr-tools/pool'
 import { nip19 } from 'nostr-tools'
@@ -7,7 +8,27 @@ import {
   ExternalLink, QrCode, User
 } from 'lucide-react'
 
-const RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nostr.band']
+const RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.nostr.band', 'wss://relay.primal.net']
+
+const fetchFollowerPubkeys = (pubkeyHex) => new Promise(resolve => {
+  const seen = new Set()
+  const p = new SimplePool()
+  const sub = p.subscribe(RELAYS, { kinds:[3], '#p':[pubkeyHex], limit:500 }, {
+    onevent(e) { seen.add(e.pubkey) },
+    oneose() { sub.close(); resolve([...seen]) }
+  })
+  setTimeout(()=>resolve([...seen]), 6000)
+})
+
+const fetchFollowingPubkeys = (pubkeyHex) => new Promise(resolve => {
+  let contacts = []
+  const p = new SimplePool()
+  const sub = p.subscribe(RELAYS, { kinds:[3], authors:[pubkeyHex], limit:1 }, {
+    onevent(e) { contacts = (e.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1]) },
+    oneose() { sub.close(); resolve(contacts) }
+  })
+  setTimeout(()=>resolve(contacts), 6000)
+})
 
 const S = {
   gold: '#C9A84C', goldDark: '#8B6010', goldLight: '#E8C96A',
@@ -65,6 +86,7 @@ export default function ProfileModal({ pubkey, onClose, onDM }) {
     pubkey
   )
   const [copied,      setCopied]      = useState(false)
+  const navigate = useNavigate()
 
 
   const npub = (() => { try { return nip19.npubEncode(pubkey) } catch { return '' } })()
@@ -183,14 +205,16 @@ export default function ProfileModal({ pubkey, onClose, onDM }) {
                   {/* Follower / Following counts */}
                   <div style={{ display:'flex', gap:12, marginTop:6 }}>
                     {followerCount !== null && (
-                      <div style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.62rem', color:S.creamFaint }}>
+                      <button onClick={()=>{ const npubStr = nip19.npubEncode(pubkey); onClose(); navigate(`/follow/followers/${npubStr}`) }}
+                        style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.62rem', color:S.creamFaint, background:'none', border:'none', cursor:'pointer', padding:0 }}>
                         <span style={{ fontWeight:700, color:S.cream }}>{followerCount}</span> followers
-                      </div>
+                      </button>
                     )}
                     {followingCount !== null && (
-                      <div style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.62rem', color:S.creamFaint }}>
+                      <button onClick={()=>{ const npubStr = nip19.npubEncode(pubkey); onClose(); navigate(`/follow/following/${npubStr}`) }}
+                        style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.62rem', color:S.creamFaint, background:'none', border:'none', cursor:'pointer', padding:0 }}>
                         <span style={{ fontWeight:700, color:S.cream }}>{followingCount}</span> following
-                      </div>
+                      </button>
                     )}
                   </div>
                 </div>
@@ -333,6 +357,7 @@ export default function ProfileModal({ pubkey, onClose, onDM }) {
           )}
         </div>
       </div>
+
     </>
   )
 }

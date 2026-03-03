@@ -116,10 +116,11 @@ export function useFollow(targetNpub, targetPubHex) {
     // Fetch target's following count
     fetchContactList(targetPubHex).then(({ contacts }) => setFollowingCount(contacts.length))
 
-    // Check if I follow this person
+    // Check if I follow this person + cache contacts
     if (myPubkey) {
       fetchContactList(myPubkey).then(({ contacts }) => {
         setIsFollowing(contacts.includes(targetPubHex))
+        try { localStorage.setItem('satscode_contacts', JSON.stringify(contacts)) } catch {}
       })
     }
   }, [targetPubHex, myPubkey])
@@ -141,6 +142,8 @@ export function useFollow(targetNpub, targetPubHex) {
         updated = contacts.includes(targetPubHex) ? contacts : [...contacts, targetPubHex]
       }
       await publishContactList(updated)
+      // Save to localStorage so Feed can read instantly
+      try { localStorage.setItem('satscode_contacts', JSON.stringify(updated)) } catch {}
       setIsFollowing(!isFollowing)
       // Update follower count optimistically
       setFollowerCount(n => n !== null ? (isFollowing ? Math.max(0, n - 1) : n + 1) : null)

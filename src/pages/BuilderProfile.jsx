@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
 import { SimplePool } from 'nostr-tools/pool'
 import { nip19 } from 'nostr-tools'
 import { finalizeEvent } from 'nostr-tools/pure'
@@ -117,6 +118,8 @@ async function publishContactList(contacts) {
 }
 
 function Avatar({ profile, pubkey, size }) {
+  const navigate = useNavigate()
+  const location = useLocation()
   const [err, setErr] = useState(false)
   const sz = size || 72
   const letter = ((profile && (profile.name || profile.display_name)) || pubkey || '?')[0].toUpperCase()
@@ -141,6 +144,12 @@ export default function BuilderProfile({ npub, builder, initialProfile, onClose,
   const [loadingRepos, setLoadingRepos] = useState(false)
   const [copied,       setCopied]       = useState(false)
   const [showZap,      setShowZap]      = useState(false)
+  const [showFollowSheet, setShowFollowSheet] = useState(null) // 'followers' | 'following'
+  const [followSheetList, setFollowSheetList] = useState([])
+  const [followSheetProfiles, setFollowSheetProfiles] = useState({})
+  const [followSheetLoading, setFollowSheetLoading] = useState(false)
+  const [myContacts, setMyContacts] = useState(() => { try { return JSON.parse(localStorage.getItem('satscode_contacts')||'[]') } catch { return [] } })
+  const [followBusyMap, setFollowBusyMap] = useState({})
   const [activeDMPeer, setActiveDMPeer] = useState(null)
   const [zapStatus,    setZapStatus]    = useState('idle')
   const [zapErr,       setZapErr]       = useState('')
@@ -167,6 +176,14 @@ export default function BuilderProfile({ npub, builder, initialProfile, onClose,
   const skills = (builder && builder.skills) || []
 
   // ── Fetch follow data on mount ───────────────────────────────────────────────
+  // Close overlay when navigating away
+  const initialPath = useRef(location.pathname)
+  useEffect(() => {
+    if (location.pathname !== initialPath.current) {
+      onClose && onClose()
+    }
+  }, [location.pathname])
+
   useEffect(() => {
     if (!pubkeyHex) return
     // follower count (how many follow this builder)
@@ -290,6 +307,61 @@ export default function BuilderProfile({ npub, builder, initialProfile, onClose,
       .catch(err => { console.error('[GitHub] fetch failed:', err); setLoadingRepos(false) })
   }, [builder, profile])
 
+  const openFollowSheet = (type) => {
+    setShowFollowSheet(type)
+    setFollowSheetList([])
+    setFollowSheetProfiles({})
+    setFollowSheetLoading(true)
+    const seen = new Set()
+    if (type === 'followers') {
+      const sub = pool().subscribe(RELAYS, { kinds:[3], '#p':[pubkeyHex], limit:500 }, {
+        onevent(e) { seen.add(e.pubkey) },
+        oneose() {
+          sub.close()
+          const list = [...seen]
+          setFollowSheetList(list)
+          setFollowSheetLoading(false)
+          if (list.length) {
+            const ps = pool().subscribe(RELAYS, { kinds:[0], authors:list, limit:list.length }, {
+              onevent(e) { try { setFollowSheetProfiles(prev=>({...prev,[e.pubkey]:JSON.parse(e.content)})) } catch {} },
+              oneose() { ps.close() }
+            })
+          }
+        }
+      })
+      setTimeout(() => { setFollowSheetList([...seen]); setFollowSheetLoading(false) }, 7000)
+    } else {
+      const sub = pool().subscribe(RELAYS, { kinds:[3], authors:[pubkeyHex], limit:1 }, {
+        onevent(e) {
+          const list = (e.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
+          setFollowSheetList(list)
+          if (list.length) {
+            const ps = pool().subscribe(RELAYS, { kinds:[0], authors:list, limit:list.length }, {
+              onevent(e) { try { setFollowSheetProfiles(prev=>({...prev,[e.pubkey]:JSON.parse(e.content)})) } catch {} },
+              oneose() { ps.close() }
+            })
+          }
+        },
+        oneose() { sub.close(); setFollowSheetLoading(false) }
+      })
+      setTimeout(() => setFollowSheetLoading(false), 7000)
+    }
+  }
+
+  const toggleFollowInSheet = async (targetPk) => {
+    const sk = getSkBytes(); if (!sk || !getMyPubkey()) return
+    setFollowBusyMap(prev=>({...prev,[targetPk]:true}))
+    try {
+      const isF = myContacts.includes(targetPk)
+      const updated = isF ? myContacts.filter(p=>p!==targetPk) : [...myContacts, targetPk]
+      const k3 = finalizeEvent({ kind:3, created_at:Math.floor(Date.now()/1000), tags:updated.map(pk=>['p',pk,'','']), content:'' }, sk)
+      await Promise.any(pool().publish(RELAYS, k3))
+      try { localStorage.setItem('satscode_contacts', JSON.stringify(updated)) } catch {}
+      setMyContacts(updated)
+    } catch(e) { console.error(e) }
+    setFollowBusyMap(prev=>({...prev,[targetPk]:false}))
+  }
+
   const doZap = async (sats) => {
     const lnAddr = profile && (profile.lud16 || profile.lud06)
     if (!lnAddr) { setZapErr('No lightning address'); return }
@@ -363,14 +435,16 @@ export default function BuilderProfile({ npub, builder, initialProfile, onClose,
                   {/* Follower / Following counts */}
                   <div style={{ display:'flex', gap:14 }}>
                     {followerCount !== null && (
-                      <div style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.62rem', color:S.creamFaint }}>
+                      <button onClick={()=>openFollowSheet('followers')}
+                        style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.62rem', color:S.creamFaint, background:'none', border:'none', cursor:'pointer', padding:0 }}>
                         <span style={{ fontWeight:700, color:S.cream }}>{followerCount}</span> followers
-                      </div>
+                      </button>
                     )}
                     {followingCount !== null && (
-                      <div style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.62rem', color:S.creamFaint }}>
+                      <button onClick={()=>openFollowSheet('following')}
+                        style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.62rem', color:S.creamFaint, background:'none', border:'none', cursor:'pointer', padding:0 }}>
                         <span style={{ fontWeight:700, color:S.cream }}>{followingCount}</span> following
-                      </div>
+                      </button>
                     )}
                   </div>
                 </div>
@@ -589,6 +663,7 @@ export default function BuilderProfile({ npub, builder, initialProfile, onClose,
         )}
       </div>
 
+
       {activeDMPeer && (
         <div style={{ position:'fixed', inset:0, zIndex:300, background:'#0D0B06' }}>
           <MessagesPage
@@ -603,6 +678,58 @@ export default function BuilderProfile({ npub, builder, initialProfile, onClose,
         </div>
       )}
 
+      {showFollowSheet && (
+        <div onClick={e=>e.target===e.currentTarget&&setShowFollowSheet(null)}
+          style={{ position:'fixed', inset:0, zIndex:400, background:'rgba(0,0,0,0.85)', backdropFilter:'blur(8px)', display:'flex', alignItems:'flex-end' }}>
+          <div style={{ width:'100%', background:S.card2, borderRadius:'18px 18px 0 0', border:'1px solid '+S.borderMid, padding:'20px 20px 48px', maxHeight:'75vh', display:'flex', flexDirection:'column', animation:'slideUp .25s ease' }}>
+            <div style={{ width:36, height:3, background:'rgba(201,168,76,0.2)', borderRadius:2, margin:'0 auto 16px' }}/>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+              <span style={{ fontFamily:'Cormorant Garamond,serif', fontSize:'1.2rem', fontWeight:700, color:S.cream, textTransform:'capitalize' }}>
+                {showFollowSheet} <span style={{ color:S.gold }}>({followSheetList.length})</span>
+              </span>
+              <button onClick={()=>setShowFollowSheet(null)} style={{ background:'none', border:'none', cursor:'pointer', color:S.creamFaint }}><X size={18}/></button>
+            </div>
+            {followSheetLoading && (
+              <div style={{ textAlign:'center', padding:'30px 0' }}>
+                <Loader size={20} color={S.gold} style={{ animation:'spin 1s linear infinite', display:'block', margin:'0 auto' }}/>
+              </div>
+            )}
+            <div style={{ overflowY:'auto', flex:1 }}>
+              {!followSheetLoading && followSheetList.length === 0 && (
+                <div style={{ textAlign:'center', padding:'30px 0', fontFamily:'Cormorant Garamond,serif', fontSize:'1rem', fontStyle:'italic', color:S.creamFaint }}>Nobody here yet</div>
+              )}
+              {followSheetList.map(hex => {
+                const p = followSheetProfiles[hex]
+                const name = p?.name || p?.display_name || hex.slice(0,10)+'…'
+                const letter = name.slice(0,1).toUpperCase()
+                const isMe = hex === getMyPubkey()
+                const isF = myContacts.includes(hex)
+                const isBusy = followBusyMap[hex]
+                return (
+                  <div key={hex} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:'1px solid '+S.border }}>
+                    {p?.picture
+                      ? <img src={p.picture} alt={letter} onError={e=>e.target.style.display='none'} style={{ width:40, height:40, borderRadius:'50%', objectFit:'cover', border:'1px solid '+S.border, flexShrink:0 }}/>
+                      : <div style={{ width:40, height:40, borderRadius:'50%', background:'rgba(201,168,76,0.08)', border:'1px solid '+S.border, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Cormorant Garamond,serif', fontSize:'1rem', fontWeight:600, color:S.gold, flexShrink:0 }}>{letter}</div>
+                    }
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.75rem', fontWeight:600, color:S.cream, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name}</div>
+                      <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:'0.46rem', color:'rgba(201,168,76,0.3)', marginTop:2 }}>
+                        {(() => { try { return nip19.npubEncode(hex).slice(0,14)+'…' } catch { return hex.slice(0,10)+'…' } })()}
+                      </div>
+                    </div>
+                    {!isMe && getMyPubkey() && (
+                      <button onClick={()=>toggleFollowInSheet(hex)} disabled={isBusy}
+                        style={{ display:'flex', alignItems:'center', gap:5, padding:'7px 12px', borderRadius:8, border:'1px solid '+(isF?S.borderMid:S.gold+'60'), background:isF?'rgba(201,168,76,0.08)':'linear-gradient(135deg,'+S.gold+','+S.goldLight+')', cursor:isBusy?'not-allowed':'pointer', fontFamily:'Montserrat,sans-serif', fontWeight:700, fontSize:'0.6rem', color:isF?S.gold:S.bg, flexShrink:0 }}>
+                        {isBusy ? <Loader size={11} style={{animation:'spin 1s linear infinite'}}/> : isF ? <><UserCheck size={11}/> Following</> : <><UserPlus size={11}/> Follow</>}
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
       {showZap && (
         <div onClick={e => e.target===e.currentTarget && setShowZap(false)}
           style={{ position:'fixed', inset:0, zIndex:300, background:'rgba(0,0,0,0.85)', backdropFilter:'blur(8px)', display:'flex', alignItems:'flex-end' }}>
