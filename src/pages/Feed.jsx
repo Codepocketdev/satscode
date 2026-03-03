@@ -1009,44 +1009,36 @@ export default function Feed({ user }) {
         },
         oneose() {
           delSub.close()
-          // Following filter — read from localStorage first, fallback to relay kind:3
+          // Following filter — always fetch fresh kind:3 from relay
           if (source === 'following') {
             const myPubkey = (() => { try { return JSON.parse(localStorage.getItem('satscode_user')||'{}').pubkey||null } catch { return null } })()
             if (!myPubkey) { setLoading(false); return }
 
-            const cached = (() => { try { return JSON.parse(localStorage.getItem('satscode_contacts')||'[]') } catch { return [] } })()
-
+            let started = false
             const startFollowFeed = (contacts) => {
-              if (!contacts.length) { setLoading(false); return }
+              if (started || !contacts.length) { if (!contacts.length) setLoading(false); return }
+              started = true
+              try { localStorage.setItem('satscode_contacts', JSON.stringify(contacts)) } catch {}
               const followFilter = { kinds:[1], authors:contacts, since: Math.floor(Date.now()/1000) - 86400*7, limit:100 }
               feedSub = startFeed(followFilter)
             }
 
-            if (cached.length) {
-              // Use cache immediately, then refresh in background
-              startFollowFeed(cached)
-              pool.subscribe(RELAYS, { kinds:[3], authors:[myPubkey], limit:1 }, {
-                onevent(e) {
-                  const fresh = (e.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
-                  try { localStorage.setItem('satscode_contacts', JSON.stringify(fresh)) } catch {}
-                },
-                oneose() {}
-              })
-            } else {
-              // No cache — fetch from relay
-              let followingHex = []
-              const k3sub = pool.subscribe(RELAYS, { kinds:[3], authors:[myPubkey], limit:1 }, {
-                onevent(e) {
-                  followingHex = (e.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
-                  try { localStorage.setItem('satscode_contacts', JSON.stringify(followingHex)) } catch {}
-                },
-                oneose() {
-                  k3sub.close()
-                  startFollowFeed(followingHex)
-                }
-              })
-              setTimeout(() => { try{k3sub.close()}catch{}; setLoading(false) }, 6000)
-            }
+            // Try cache first for instant start
+            const cached = (() => { try { return JSON.parse(localStorage.getItem('satscode_contacts')||'[]') } catch { return [] } })()
+            if (cached.length) startFollowFeed(cached)
+
+            // Always fetch fresh from relay
+            const k3sub = pool.subscribe(RELAYS, { kinds:[3], authors:[myPubkey], limit:1 }, {
+              onevent(e) {
+                const fresh = (e.tags||[]).filter(t=>t[0]==='p'&&t[1]).map(t=>t[1])
+                if (fresh.length) startFollowFeed(fresh)
+              },
+              oneose() {
+                k3sub.close()
+                if (!started) setLoading(false)
+              }
+            })
+            setTimeout(() => { try{k3sub.close()}catch{}; if (!started) setLoading(false) }, 7000)
             return
           }
           feedSub = startFeed()
