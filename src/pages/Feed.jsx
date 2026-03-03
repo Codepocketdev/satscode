@@ -370,7 +370,7 @@ function ActionBtn({ onClick, icon, count, activeColor, active, hoverBg }) {
 }
 
 // ── Post card ─────────────────────────────────────────────────────────────────
-function PostCard({ event, profiles, onAvatarClick, onDM }) {
+function PostCard({ event, profiles, onAvatarClick, onDM, onComment }) {
   const profile = profiles[event.pubkey] || {}
   const npub = (() => { try { return nip19.npubEncode(event.pubkey) } catch { return '' } })()
   const name = profile.name || profile.display_name || shortKey(npub)
@@ -534,9 +534,9 @@ function PostCard({ event, profiles, onAvatarClick, onDM }) {
             hoverBg='rgba(239,68,68,0.06)'
           />
 
-          {/* DM */}
+          {/* Comment */}
           <ActionBtn
-            onClick={() => onDM && onDM(event.pubkey, profile)}
+            onClick={() => onComment && onComment(event)}
             icon={<MessageCircle size={15} />}
             count={0}
             activeColor={S.gold}
@@ -830,6 +830,144 @@ function ComposeModal({ user, profiles, onClose, onPublished }) {
 }
 
 // ── Main Feed ─────────────────────────────────────────────────────────────────
+
+// ─── Thread / Comments Sheet ──────────────────────────────────────────────────
+function ThreadSheet({ event, profiles, user, onClose }) {
+  const [replies,     setReplies]     = useState([])
+  const [replyProfs,  setReplyProfs]  = useState({})
+  const [loading,     setLoading]     = useState(true)
+  const [text,        setText]        = useState('')
+  const [posting,     setPosting]     = useState(false)
+  const [postedOk,    setPostedOk]    = useState(false)
+
+  const pool = getPool()
+  const author = profiles[event.pubkey] || {}
+  const authorName = author.name || author.display_name || event.pubkey.slice(0,10)+'…'
+  const timeAgoStr = (() => {
+    const s = Math.floor(Date.now()/1000) - event.created_at
+    if (s < 60) return 'just now'
+    if (s < 3600) return Math.floor(s/60)+'m ago'
+    if (s < 86400) return Math.floor(s/3600)+'h ago'
+    return Math.floor(s/86400)+'d ago'
+  })()
+
+  useEffect(() => {
+    const seen = new Set()
+    const sub = pool.subscribe(RELAYS, { kinds:[1], '#e':[event.id], limit:100 }, {
+      onevent(e) {
+        if (seen.has(e.id)) return
+        seen.add(e.id)
+        setReplies(prev => [...prev, e].sort((a,b) => a.created_at - b.created_at))
+        // fetch profile
+        const rSub = pool.subscribe(RELAYS, { kinds:[0], authors:[e.pubkey], limit:1 }, {
+          onevent(pe) { try { setReplyProfs(prev => ({...prev, [pe.pubkey]: JSON.parse(pe.content)})) } catch {} },
+          oneose() { rSub.close() }
+        })
+      },
+      oneose() { setLoading(false) }
+    })
+    setTimeout(() => setLoading(false), 6000)
+    return () => { try{sub.close()}catch{} }
+  }, [event.id])
+
+  const postReply = async () => {
+    if (!text.trim() || !user) return
+    setPosting(true)
+    try {
+      const sk = (() => { try { const n=localStorage.getItem('satscode_nsec'); if(!n)return null; const {type,data}=nip19.decode(n.trim()); return type==='nsec'?data:null } catch{return null} })()
+      if (!sk) throw new Error('No key')
+      const ev = finalizeEvent({
+        kind: 1,
+        created_at: Math.floor(Date.now()/1000),
+        tags: [['e', event.id, '', 'reply'], ['p', event.pubkey]],
+        content: text.trim(),
+      }, sk)
+      await Promise.any(pool.publish(RELAYS, ev))
+      setReplies(prev => [...prev, ev])
+      setText('')
+      setPostedOk(true)
+      setTimeout(() => setPostedOk(false), 2000)
+    } catch(e) { console.error(e) }
+    setPosting(false)
+  }
+
+  const S2 = { gold:'#C9A84C', goldLight:'#E8C96A', bg:'#0D0B06', card:'#111009', card2:'#161209', cream:'#F5ECD7', creamFaint:'rgba(245,236,215,0.35)', border:'rgba(201,168,76,0.12)', borderMid:'rgba(201,168,76,0.28)' }
+
+  return (
+    <div onClick={e=>e.target===e.currentTarget&&onClose()}
+      style={{ position:'fixed', inset:0, zIndex:500, background:'rgba(0,0,0,0.88)', display:'flex', alignItems:'flex-end' }}>
+      <div style={{ width:'100%', background:S2.bg, borderRadius:'18px 18px 0 0', border:'1px solid '+S2.borderMid, maxHeight:'88vh', display:'flex', flexDirection:'column', animation:'slideUp .25s ease' }}>
+        <style>{`@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}} @keyframes spin{to{transform:rotate(360deg)}}`}</style>
+
+        {/* Handle + header */}
+        <div style={{ padding:'14px 16px 10px', borderBottom:'1px solid '+S2.border, flexShrink:0 }}>
+          <div style={{ width:36, height:3, background:'rgba(201,168,76,0.2)', borderRadius:2, margin:'0 auto 14px' }}/>
+          {/* Original post */}
+          <div style={{ display:'flex', gap:10, alignItems:'flex-start' }}>
+            {author.picture
+              ? <img src={author.picture} onError={e=>e.target.style.display='none'} style={{ width:36, height:36, borderRadius:'50%', objectFit:'cover', border:'1px solid '+S2.border, flexShrink:0 }}/>
+              : <div style={{ width:36, height:36, borderRadius:'50%', background:'rgba(201,168,76,0.08)', border:'1px solid '+S2.border, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Cormorant Garamond,serif', fontSize:'1rem', color:S2.gold, flexShrink:0 }}>{authorName[0].toUpperCase()}</div>
+            }
+            <div style={{ flex:1 }}>
+              <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:3 }}>
+                <span style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.75rem', fontWeight:700, color:S2.cream }}>{authorName}</span>
+                <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:'0.48rem', color:'rgba(201,168,76,0.3)' }}>{timeAgoStr}</span>
+              </div>
+              <div style={{ fontFamily:'Cormorant Garamond,serif', fontSize:'0.95rem', color:'rgba(245,236,215,0.8)', lineHeight:1.6 }}>{event.content}</div>
+            </div>
+            <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:S2.creamFaint, padding:4 }}><X size={16}/></button>
+          </div>
+          <div style={{ marginTop:8, fontFamily:'Montserrat,sans-serif', fontSize:'0.6rem', color:'rgba(201,168,76,0.4)', letterSpacing:'0.1em' }}>
+            {loading ? 'Loading replies…' : `${replies.length} ${replies.length===1?'reply':'replies'}`}
+          </div>
+        </div>
+
+        {/* Replies list */}
+        <div style={{ flex:1, overflowY:'auto', padding:'8px 16px' }}>
+          {loading && <div style={{ textAlign:'center', padding:'24px 0' }}><Loader size={18} color={S2.gold} style={{ animation:'spin 1s linear infinite', display:'block', margin:'0 auto' }}/></div>}
+          {!loading && replies.length === 0 && (
+            <div style={{ textAlign:'center', padding:'24px 0', fontFamily:'Cormorant Garamond,serif', fontSize:'0.95rem', fontStyle:'italic', color:S2.creamFaint }}>No replies yet — be the first</div>
+          )}
+          {replies.map(r => {
+            const rp = replyProfs[r.pubkey] || {}
+            const rName = rp.name || rp.display_name || r.pubkey.slice(0,10)+'…'
+            const rTime = (() => { const s=Math.floor(Date.now()/1000)-r.created_at; if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago' })()
+            return (
+              <div key={r.id} style={{ display:'flex', gap:10, padding:'10px 0', borderBottom:'1px solid '+S2.border }}>
+                {rp.picture
+                  ? <img src={rp.picture} onError={e=>e.target.style.display='none'} style={{ width:32, height:32, borderRadius:'50%', objectFit:'cover', border:'1px solid '+S2.border, flexShrink:0 }}/>
+                  : <div style={{ width:32, height:32, borderRadius:'50%', background:'rgba(201,168,76,0.08)', border:'1px solid '+S2.border, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Cormorant Garamond,serif', fontSize:'0.9rem', color:S2.gold, flexShrink:0 }}>{rName[0].toUpperCase()}</div>
+                }
+                <div style={{ flex:1 }}>
+                  <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:2 }}>
+                    <span style={{ fontFamily:'Montserrat,sans-serif', fontSize:'0.68rem', fontWeight:700, color:S2.cream }}>{rName}</span>
+                    <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:'0.45rem', color:'rgba(201,168,76,0.3)' }}>{rTime}</span>
+                  </div>
+                  <div style={{ fontFamily:'Cormorant Garamond,serif', fontSize:'0.9rem', color:'rgba(245,236,215,0.75)', lineHeight:1.55 }}>{r.content}</div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Reply input */}
+        {user && (
+          <div style={{ padding:'12px 16px', borderTop:'1px solid '+S2.border, flexShrink:0, paddingBottom:'calc(env(safe-area-inset-bottom,0px) + 12px)' }}>
+            <div style={{ display:'flex', gap:8, alignItems:'flex-end' }}>
+              <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="Write a reply…" rows={2}
+                style={{ flex:1, background:'rgba(255,255,255,0.03)', border:'1px solid '+S2.border, borderRadius:10, padding:'10px 12px', color:S2.cream, fontFamily:'Cormorant Garamond,serif', fontSize:'0.95rem', outline:'none', resize:'none', lineHeight:1.5 }}/>
+              <button onClick={postReply} disabled={posting || !text.trim()}
+                style={{ padding:'10px 16px', borderRadius:10, background:text.trim()?'linear-gradient(135deg,#C9A84C,#E8C96A)':'rgba(201,168,76,0.1)', border:'none', cursor:text.trim()?'pointer':'not-allowed', fontFamily:'Montserrat,sans-serif', fontWeight:700, fontSize:'0.7rem', color:text.trim()?'#0D0B06':'rgba(245,236,215,0.3)', flexShrink:0 }}>
+                {posting ? <Loader size={13} style={{animation:'spin 1s linear infinite'}}/> : postedOk ? '✓' : 'Reply'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Feed({ user }) {
   const _prefs        = loadFeedPrefs()
   const initSource     = _prefs.source     || 'satscode'
@@ -844,7 +982,8 @@ export default function Feed({ user }) {
   const [newPosts,       setNewPosts]       = useState([])
   const [showCompose,    setShowCompose]    = useState(false)
   const [selectedProfile, setSelectedProfile] = useState(null) // { pubkey, profile }
-  const [activeDMPeer, setActiveDMPeer] = useState(null) // { pubkey, profile }
+  const [activeDMPeer,   setActiveDMPeer]   = useState(null)
+  const [activeThread,   setActiveThread]   = useState(null) // event
   const [showSourceMenu, setShowSourceMenu] = useState(false)
   const [customTag,      setCustomTag]      = useState(initCustomTag)
   const [customTagInput, setCustomTagInput] = useState('')
@@ -1216,7 +1355,7 @@ export default function Feed({ user }) {
         )}
 
         {/* Posts */}
-        {filtered.map(e => <PostCard key={e.id} event={e} profiles={profiles} onAvatarClick={(pk, pr) => setSelectedProfile({ pubkey: pk, profile: pr })} onDM={(pk, pr) => { setActiveDMPeer({ pubkey: pk, profile: pr }) }} />)}
+        {filtered.map(e => <PostCard key={e.id} event={e} profiles={profiles} onAvatarClick={(pk, pr) => setSelectedProfile({ pubkey: pk, profile: pr })} onDM={(pk, pr) => { setActiveDMPeer({ pubkey: pk, profile: pr }) }} onComment={(ev) => setActiveThread(ev)} />)}
 
       </div>
 
@@ -1240,7 +1379,16 @@ export default function Feed({ user }) {
         <ProfileModal
           pubkey={selectedProfile.pubkey}
           onClose={() => setSelectedProfile(null)}
-          onDM={(pk, pr) => { setSelectedProfile(null) }}
+          onDM={(pk, pr) => { setSelectedProfile(null); setActiveDMPeer({ pubkey: pk, profile: pr }) }}
+        />
+      )}
+
+      {activeThread && (
+        <ThreadSheet
+          event={activeThread}
+          profiles={profiles}
+          user={user}
+          onClose={() => setActiveThread(null)}
         />
       )}
 
