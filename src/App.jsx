@@ -14,6 +14,7 @@ import FollowList from './pages/FollowList'
 import Registry from './pages/Registry'
 import Stack from './pages/Stack'
 import Bounties from './pages/Bounties'
+import DonatePage from './pages/DonatePage'
 
 const USER_KEY = 'satscode_user'
 const NSEC_KEY = 'satscode_nsec'
@@ -31,11 +32,9 @@ function saveUser(userData) {
     localStorage.removeItem(NSEC_KEY)
     return
   }
-  // Save nsec separately so Feed.jsx can sign posts
   if (userData.nsec) {
     localStorage.setItem(NSEC_KEY, userData.nsec)
   }
-  // Save user without nsec in main storage
   const { nsec, ...userWithoutNsec } = userData
   localStorage.setItem(USER_KEY, JSON.stringify(userWithoutNsec))
 }
@@ -82,7 +81,6 @@ export default function App() {
       `}</style>
 
       <BrowserRouter>
-        {/* Content always mounted underneath */}
         <div style={{ visibility: splashDone ? 'visible' : 'hidden' }}>
 
           {phase === 'landing' && (
@@ -112,17 +110,16 @@ export default function App() {
                 <Route path="/stack"          element={<Stack />} />
                 <Route path="/profile"        element={<ProfilePage user={user} onUserUpdate={u => { setUser(u); localStorage.setItem('satscode_user', JSON.stringify(u)) }} />} />
                 <Route path="/messages"       element={<MessagesPage user={user} />} />
-                <Route path="/messages"       element={<div style={{color:'#C9A84C',padding:40,fontFamily:'Montserrat,sans-serif'}}>Messages — coming soon</div>} />
                 <Route path="/settings"       element={<Settings user={user} onLogout={handleLogout} />} />
+                <Route path="/donate"         element={<DonatePage />} />
                 <Route path="/post-bounty"    element={<Navigate to="/bounties" />} />
                 <Route path="/submit-tool"    element={<SubmitTool user={user} />} />
-                <Route path="*"              element={<Navigate to="/feed" />} />
+                <Route path="*"               element={<Navigate to="/feed" />} />
               </Routes>
             </Layout>
           )}
         </div>
 
-        {/* Splash always on top */}
         {!splashDone && <Splash onDone={() => setSplashDone(true)} />}
       </BrowserRouter>
     </>

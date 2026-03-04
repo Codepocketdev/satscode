@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Rss, Users, Target, User, Menu,
-  Zap, MessageSquare, PlusCircle, Wrench, Settings, X
+  Zap, MessageSquare, PlusCircle, Wrench, Settings, X, Heart
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -18,6 +18,7 @@ const MORE_ITEMS = [
   { id: 'messages',    Icon: MessageSquare, label: 'Messages',      path: '/messages' },
   { id: 'post-bounty', Icon: PlusCircle,    label: 'Post Bounty',   path: '/post-bounty' },
   { id: 'submit-tool', Icon: Wrench,        label: 'Submit Tool',   path: '/submit-tool' },
+  { id: 'donate',      Icon: Heart,         label: 'Donate',        path: '/donate' },
   { id: 'settings',    Icon: Settings,      label: 'Settings',      path: '/settings' },
 ]
 
